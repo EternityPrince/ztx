@@ -12,10 +12,17 @@ pub fn printSummary(writer: anytype, result: *const model.ScanResult) !void {
     }
 
     try writer.writeAll("\nFiles:\n");
-    for (result.files.items) |file| {
-        try writer.print(
-            "  {s} | ext={s} | lines={d} | bytes={d}\n",
-            .{ file.path, file.extansion, file.line_count, file.byte_size },
-        );
+    for (result.entries.items) |entry| {
+        switch (entry) {
+            .dir => |dir| {
+                try writer.print("  [dir] {s}\n", .{dir.path});
+            },
+            .file => |file| {
+                try writer.print(
+                    "  {s} | ext={s} | lines={d} | bytes={d}\n",
+                    .{ file.path, file.extansion, file.line_count, file.byte_size },
+                );
+            },
+        }
     }
 }

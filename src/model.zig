@@ -5,6 +5,18 @@ pub const FileInfo = struct {
     extansion: []const u8,
     line_count: usize,
     byte_size: usize,
+    depth_level: usize,
+};
+
+pub const DirInfo = struct {
+    path: []const u8,
+    depth_level: usize,
+};
+
+// Union to exhausively represent the strucrure
+pub const FileDirInfo = union(enum) {
+    file: FileInfo,
+    dir: DirInfo,
 };
 
 pub const ExtansionStat = struct {
@@ -13,24 +25,33 @@ pub const ExtansionStat = struct {
 };
 
 pub const ScanResult = struct {
-    files: std.ArrayList(FileInfo),
+    entries: std.ArrayList(FileDirInfo),
     ext_stats: std.StringHashMap(ExtansionStat),
     total_lines: usize,
     total_files: usize,
+    total_dirs: usize,
 
     pub fn init(allocator: std.mem.Allocator) ScanResult {
         return .{
-            .files = .empty,
+            .entries = .empty,
             .ext_stats = std.StringHashMap(ExtansionStat).init(allocator),
             .total_lines = 0,
             .total_files = 0,
+            .total_dirs = 0,
         };
     }
 
     pub fn deinit(self: *ScanResult, allocator: std.mem.Allocator) void {
-        for (self.files.items) |file| {
-            allocator.free(file.path);
-            allocator.free(file.extansion);
+        for (self.entries.items) |entry| {
+            switch (entry) {
+                .file => |file| {
+                    allocator.free(file.path);
+                    allocator.free(file.extansion);
+                },
+                .dir => |dir| {
+                    allocator.free(dir.path);
+                },
+            }
         }
 
         var iter = self.ext_stats.iterator();
@@ -38,7 +59,7 @@ pub const ScanResult = struct {
             allocator.free(ext.key_ptr.*);
         }
 
-        self.files.deinit(allocator);
+        self.entries.deinit(allocator);
         self.ext_stats.deinit();
     }
 };
