@@ -2,6 +2,7 @@ const std = @import("std");
 const model = @import("../model.zig");
 const helper = @import("../helper/walker_helper.zig");
 const walker = @import("../walker.zig");
+const cli = @import("../cli/config.zig");
 
 pub fn handleDirectory(
     allocator: std.mem.Allocator,
@@ -10,6 +11,7 @@ pub fn handleDirectory(
     prefix: []const u8,
     depht: usize,
     result: *model.ScanResult,
+    config: cli.Config,
 ) !void {
     const rel_path = try helper.joinRelativePath(allocator, prefix, name);
     defer allocator.free(rel_path);
@@ -29,5 +31,5 @@ pub fn handleDirectory(
     var child = try dir.openDir(name, .{ .iterate = true });
     defer child.close();
 
-    try walker.walkDir(allocator, &child, rel_path, depht + 1, result);
+    try walker.walkDir(allocator, &child, rel_path, depht + 1, result, config);
 }

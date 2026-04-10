@@ -1,16 +1,19 @@
 const std = @import("std");
+const ScanMode = @import("config.zig").ScanMode;
 
 pub const Options = struct {
     show_tree: bool = true,
     show_content: bool = true,
     show_stats: bool = true,
     show_help: bool = false,
+    scan_mode: ScanMode = .default,
 };
 
 const Arg = enum {
     no_tree,
     no_content,
     no_stats,
+    full,
     help,
 };
 
@@ -31,6 +34,7 @@ pub fn parseArgs(allocator: std.mem.Allocator) !Options {
             .no_tree => options.show_tree = false,
             .no_content => options.show_content = false,
             .no_stats => options.show_stats = false,
+            .full => options.scan_mode = .full,
             .help => options.show_help = true,
         }
     }
@@ -42,6 +46,7 @@ fn parseRawArg(arg: []const u8) !Arg {
     if (std.mem.eql(u8, arg, "-no-tree")) return .no_tree;
     if (std.mem.eql(u8, arg, "-no-content")) return .no_content;
     if (std.mem.eql(u8, arg, "-no-stats")) return .no_stats;
+    if (std.mem.eql(u8, arg, "-full")) return .full;
     if (std.mem.eql(u8, arg, "--help")) return .help;
     if (std.mem.eql(u8, arg, "-h")) return .help;
 
@@ -66,4 +71,3 @@ pub fn printHelp() !void {
 
     try stdout.flush();
 }
-

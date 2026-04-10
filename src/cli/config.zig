@@ -1,10 +1,16 @@
 const parse = @import("parse.zig");
 
+pub const ScanMode = enum {
+    default,
+    full,
+};
+
 pub const Config = struct {
     show_content: bool,
     show_tree: bool,
     show_help: bool,
     show_stats: bool,
+    scan_mode: ScanMode,
 
     const Self = @This();
 
@@ -14,6 +20,7 @@ pub const Config = struct {
             .show_tree = options.show_tree,
             .show_help = options.show_help,
             .show_stats = options.show_stats,
+            .scan_mode = options.scan_mode,
         };
 
         config.normalize();
@@ -43,4 +50,3 @@ pub const Config = struct {
             !self.show_help;
     }
 };
-

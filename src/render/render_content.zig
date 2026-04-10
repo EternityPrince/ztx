@@ -1,6 +1,5 @@
 const std = @import("std");
 const model = @import("../model.zig");
-const printFileBody = @import("../helper/render_helper.zig").printFileBody;
 
 pub fn printContent(writer: anytype, result: *const model.ScanResult) !void {
     try writer.writeAll("FILES\n");
@@ -10,7 +9,11 @@ pub fn printContent(writer: anytype, result: *const model.ScanResult) !void {
             .dir => {},
             .file => |file| {
                 try writer.print("===== {s} =====\n", .{file.path});
-                try printFileBody(writer, file.path);
+
+                if (file.content) |content| {
+                    try writer.writeAll(content);
+                }
+
                 try writer.writeAll("\n");
             },
         }

@@ -6,6 +6,7 @@ pub const FileInfo = struct {
     line_count: usize,
     byte_size: usize,
     depth_level: usize,
+    content: ?[]u8,
 };
 
 pub const DirInfo = struct {
@@ -47,6 +48,7 @@ pub const ScanResult = struct {
                 .file => |file| {
                     allocator.free(file.path);
                     allocator.free(file.extansion);
+                    if (file.content) |content| allocator.free(content);
                 },
                 .dir => |dir| {
                     allocator.free(dir.path);
