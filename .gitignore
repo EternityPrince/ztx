@@ -1,2 +1,4 @@
+zig-out
+main
 .zig-cache
 .git

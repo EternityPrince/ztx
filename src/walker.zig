@@ -13,7 +13,7 @@ pub fn scanCurrentDir(allocator: std.mem.Allocator) !model.ScanResult {
     });
     defer dir.close();
 
-    try walkDir(allocator, &dir, "", 1, &result);
+    try walkDir(allocator, &dir, "", 0, &result);
     return result;
 }
 

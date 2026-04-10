@@ -1,15 +1,16 @@
 const std = @import("std");
 const walker = @import("walker.zig");
-const render = @import("render.zig");
+const render = @import("render/render.zig");
+const cli = @import("cli/config.zig");
 
-pub fn run(allocator: std.mem.Allocator) !void {
+pub fn run(allocator: std.mem.Allocator, config: cli.Config) !void {
     var result = try walker.scanCurrentDir(allocator);
     defer result.deinit(allocator);
 
     var stdout_buffer: [4096]u8 = undefined;
     var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
-    const stdout = &stdout_writer.interface;
+    var stdout = &stdout_writer.interface;
 
-    try render.printSummary(stdout, &result);
+    try render.printStdout(stdout, &result, config);
     try stdout.flush();
 }
