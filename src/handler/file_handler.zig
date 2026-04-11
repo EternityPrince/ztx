@@ -40,7 +40,7 @@ pub fn handleFile(
     const ext_copy = try allocator.dupe(u8, ext_value);
     errdefer allocator.free(ext_copy);
 
-    if (config.show_stats) try stats.updateExtansionStats(allocator, result, ext_value, file_data.line_count);
+    if (config.show_stats) try stats.updateExtansionStats(allocator, result, ext_value, file_data.line_count, stat.size);
 
     try result.entries.append(allocator, .{
         .file = .{
@@ -54,5 +54,8 @@ pub fn handleFile(
     });
 
     result.total_files += 1;
-    if (config.show_stats) result.total_lines += file_data.line_count;
+    if (config.show_stats) {
+        result.total_lines += file_data.line_count;
+        result.total_bytes += stat.size;
+    }
 }

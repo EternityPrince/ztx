@@ -5,6 +5,7 @@ pub const Options = struct {
     show_tree: bool = true,
     show_content: bool = true,
     show_stats: bool = true,
+    no_color: bool = false,
     show_help: bool = false,
     scan_mode: ScanMode = .default,
 };
@@ -13,6 +14,7 @@ const Arg = enum {
     no_tree,
     no_content,
     no_stats,
+    no_color,
     full,
     help,
 };
@@ -34,6 +36,7 @@ pub fn parseArgs(allocator: std.mem.Allocator) !Options {
             .no_tree => options.show_tree = false,
             .no_content => options.show_content = false,
             .no_stats => options.show_stats = false,
+            .no_color => options.no_color = true,
             .full => options.scan_mode = .full,
             .help => options.show_help = true,
         }
@@ -46,6 +49,7 @@ fn parseRawArg(arg: []const u8) !Arg {
     if (std.mem.eql(u8, arg, "-no-tree")) return .no_tree;
     if (std.mem.eql(u8, arg, "-no-content")) return .no_content;
     if (std.mem.eql(u8, arg, "-no-stats")) return .no_stats;
+    if (std.mem.eql(u8, arg, "-no-color")) return .no_color;
     if (std.mem.eql(u8, arg, "-full")) return .full;
     if (std.mem.eql(u8, arg, "--help")) return .help;
     if (std.mem.eql(u8, arg, "-h")) return .help;
@@ -59,15 +63,20 @@ pub fn printHelp() !void {
     var stdout = &stdout_writer.interface;
 
     try stdout.writeAll(
-        \\Usage: ztx [-no-tree] [-no-content] [-no-stats]
+        \\Usage: ztx [-no-tree] [-no-content] [-no-stats] [-no-color]
         \\
         \\Flags:
         \\  -no-tree      do not print directory tree
         \\  -no-content   do not print file contents
         \\  -no-stats     do not print summary statistics
+        \\  -no-color     disable ANSI colors
         \\  -h, --help    show help
         \\
     );
 
     try stdout.flush();
+}
+
+test "parseRawArg supports -no-color" {
+    try std.testing.expectEqual(Arg.no_color, try parseRawArg("-no-color"));
 }

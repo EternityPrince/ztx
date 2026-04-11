@@ -23,12 +23,14 @@ pub const FileDirInfo = union(enum) {
 pub const ExtansionStat = struct {
     count: usize,
     total_lines: usize,
+    total_bytes: usize,
 };
 
 pub const ScanResult = struct {
     entries: std.ArrayList(FileDirInfo),
     ext_stats: std.StringHashMap(ExtansionStat),
     total_lines: usize,
+    total_bytes: usize,
     total_files: usize,
     total_dirs: usize,
 
@@ -37,6 +39,7 @@ pub const ScanResult = struct {
             .entries = .empty,
             .ext_stats = std.StringHashMap(ExtansionStat).init(allocator),
             .total_lines = 0,
+            .total_bytes = 0,
             .total_files = 0,
             .total_dirs = 0,
         };

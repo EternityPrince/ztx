@@ -1,3 +1,4 @@
+const std = @import("std");
 const parse = @import("parse.zig");
 
 pub const ScanMode = enum {
@@ -10,6 +11,7 @@ pub const Config = struct {
     show_tree: bool,
     show_help: bool,
     show_stats: bool,
+    use_color: bool,
     scan_mode: ScanMode,
 
     const Self = @This();
@@ -20,6 +22,7 @@ pub const Config = struct {
             .show_tree = options.show_tree,
             .show_help = options.show_help,
             .show_stats = options.show_stats,
+            .use_color = detectColorMode(options.no_color),
             .scan_mode = options.scan_mode,
         };
 
@@ -48,5 +51,10 @@ pub const Config = struct {
             !self.show_tree and
             !self.show_stats and
             !self.show_help;
+    }
+
+    fn detectColorMode(no_color: bool) bool {
+        if (no_color) return false;
+        return std.fs.File.stdout().isTty();
     }
 };

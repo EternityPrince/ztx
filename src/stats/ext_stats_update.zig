@@ -6,6 +6,7 @@ pub fn updateExtansionStats(
     result: *model.ScanResult,
     ext_value: []const u8,
     line_count: usize,
+    byte_size: usize,
 ) !void {
     const gop = try result.ext_stats.getOrPut(ext_value);
 
@@ -17,9 +18,11 @@ pub fn updateExtansionStats(
         gop.value_ptr.* = .{
             .count = 1,
             .total_lines = line_count,
+            .total_bytes = byte_size,
         };
     } else {
         gop.value_ptr.*.total_lines += line_count;
+        gop.value_ptr.*.total_bytes += byte_size;
         gop.value_ptr.*.count += 1;
     }
 }
