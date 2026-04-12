@@ -49,7 +49,14 @@ pub fn main() !void {
                         "git metadata is unavailable. Run inside a git repository or rerun without --changed.\n",
                         .{},
                     );
-                    return err;
+                    std.process.exit(1);
+                },
+                error.InvalidJsonOutput => {
+                    std.debug.print(
+                        "strict JSON validation failed. Please report this with your command and repository shape.\n",
+                        .{},
+                    );
+                    std.process.exit(1);
                 },
                 else => return err,
             };

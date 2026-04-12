@@ -32,6 +32,8 @@ pub const SkippedSummary = struct {
     size_limit: usize = 0,
     depth_limit: usize = 0,
     file_limit: usize = 0,
+    symlink: usize = 0,
+    permission: usize = 0,
 };
 
 pub const ScanResult = struct {

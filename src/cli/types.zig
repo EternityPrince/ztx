@@ -17,6 +17,12 @@ pub const OutputFormat = enum {
     json,
 };
 
+pub const SortMode = enum {
+    name,
+    size,
+    lines,
+};
+
 pub fn parseScanMode(value: []const u8) !ScanMode {
     if (std.mem.eql(u8, value, "default")) return .default;
     if (std.mem.eql(u8, value, "full")) return .full;
@@ -35,6 +41,13 @@ pub fn parseOutputFormat(value: []const u8) !OutputFormat {
     if (std.mem.eql(u8, value, "markdown")) return .markdown;
     if (std.mem.eql(u8, value, "json")) return .json;
     return error.InvalidOutputFormat;
+}
+
+pub fn parseSortMode(value: []const u8) !SortMode {
+    if (std.mem.eql(u8, value, "name")) return .name;
+    if (std.mem.eql(u8, value, "size")) return .size;
+    if (std.mem.eql(u8, value, "lines")) return .lines;
+    return error.InvalidSortMode;
 }
 
 pub fn colorModeLabel(mode: ColorMode) []const u8 {
@@ -57,5 +70,13 @@ pub fn outputFormatLabel(format: OutputFormat) []const u8 {
         .text => "text",
         .markdown => "markdown",
         .json => "json",
+    };
+}
+
+pub fn sortModeLabel(mode: SortMode) []const u8 {
+    return switch (mode) {
+        .name => "name",
+        .size => "size",
+        .lines => "lines",
     };
 }

@@ -14,11 +14,23 @@ pub const RunOptions = struct {
     max_files: ?usize = null,
     max_bytes: ?usize = null,
     changed_only: ?bool = null,
+    changed_base: ?[]u8 = null,
+    include_patterns: std.ArrayList([]const u8) = .empty,
+    exclude_patterns: std.ArrayList([]const u8) = .empty,
+    strict_json: ?bool = null,
+    compact: ?bool = null,
+    sort_mode: ?types.SortMode = null,
+    top_files: ?usize = null,
 
     pub fn deinit(self: *RunOptions, allocator: std.mem.Allocator) void {
         if (self.profile) |profile| allocator.free(profile);
+        if (self.changed_base) |base| allocator.free(base);
         for (self.paths.items) |path| allocator.free(path);
+        for (self.include_patterns.items) |pattern| allocator.free(pattern);
+        for (self.exclude_patterns.items) |pattern| allocator.free(pattern);
         self.paths.deinit(allocator);
+        self.include_patterns.deinit(allocator);
+        self.exclude_patterns.deinit(allocator);
     }
 };
 
@@ -125,6 +137,10 @@ fn parseArgsFrom(allocator: std.mem.Allocator, args: []const []const u8) !Parsed
         }
         if (std.mem.eql(u8, arg, "--all")) {
             run.changed_only = false;
+            if (run.changed_base) |base| {
+                allocator.free(base);
+                run.changed_base = null;
+            }
             continue;
         }
 
@@ -158,6 +174,16 @@ fn parseArgsFrom(allocator: std.mem.Allocator, args: []const []const u8) !Parsed
             continue;
         }
 
+        if (std.mem.startsWith(u8, arg, "--sort=")) {
+            run.sort_mode = try types.parseSortMode(arg["--sort=".len..]);
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--sort")) {
+            const value = try consumeValue(args, &index, "--sort");
+            run.sort_mode = try types.parseSortMode(value);
+            continue;
+        }
+
         if (std.mem.startsWith(u8, arg, "--profile=")) {
             const value = arg["--profile=".len..];
             if (run.profile) |existing| allocator.free(existing);
@@ -179,6 +205,43 @@ fn parseArgsFrom(allocator: std.mem.Allocator, args: []const []const u8) !Parsed
         if (std.mem.eql(u8, arg, "--path")) {
             const value = try consumeValue(args, &index, "--path");
             try run.paths.append(allocator, try allocator.dupe(u8, value));
+            continue;
+        }
+
+        if (std.mem.startsWith(u8, arg, "--include=")) {
+            const value = arg["--include=".len..];
+            try run.include_patterns.append(allocator, try allocator.dupe(u8, value));
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--include")) {
+            const value = try consumeValue(args, &index, "--include");
+            try run.include_patterns.append(allocator, try allocator.dupe(u8, value));
+            continue;
+        }
+
+        if (std.mem.startsWith(u8, arg, "--exclude=")) {
+            const value = arg["--exclude=".len..];
+            try run.exclude_patterns.append(allocator, try allocator.dupe(u8, value));
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--exclude")) {
+            const value = try consumeValue(args, &index, "--exclude");
+            try run.exclude_patterns.append(allocator, try allocator.dupe(u8, value));
+            continue;
+        }
+
+        if (std.mem.startsWith(u8, arg, "--base=")) {
+            const value = arg["--base=".len..];
+            if (run.changed_base) |existing| allocator.free(existing);
+            run.changed_base = try allocator.dupe(u8, value);
+            run.changed_only = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--base")) {
+            const value = try consumeValue(args, &index, "--base");
+            if (run.changed_base) |existing| allocator.free(existing);
+            run.changed_base = try allocator.dupe(u8, value);
+            run.changed_only = true;
             continue;
         }
 
@@ -209,6 +272,34 @@ fn parseArgsFrom(allocator: std.mem.Allocator, args: []const []const u8) !Parsed
         if (std.mem.eql(u8, arg, "--max-bytes")) {
             const value = try consumeValue(args, &index, "--max-bytes");
             run.max_bytes = try parseUsize(value, "--max-bytes");
+            continue;
+        }
+
+        if (std.mem.startsWith(u8, arg, "--top-files=")) {
+            run.top_files = try parseUsize(arg["--top-files=".len..], "--top-files");
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--top-files")) {
+            const value = try consumeValue(args, &index, "--top-files");
+            run.top_files = try parseUsize(value, "--top-files");
+            continue;
+        }
+
+        if (std.mem.eql(u8, arg, "--strict-json")) {
+            run.strict_json = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--no-strict-json")) {
+            run.strict_json = false;
+            continue;
+        }
+
+        if (std.mem.eql(u8, arg, "--compact")) {
+            run.compact = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--no-compact")) {
+            run.compact = false;
             continue;
         }
 
@@ -267,12 +358,19 @@ pub fn printHelp() !void {
         \\  --color <auto|always|never>
         \\  --scan-mode <default|full>
         \\  --format <text|markdown|json>
+        \\  --strict-json / --no-strict-json
+        \\  --compact / --no-compact
+        \\  --sort <name|size|lines>
+        \\  --top-files <n>
         \\  --profile <review|llm|stats|custom>
         \\  --path <dir-or-file> (repeatable)
+        \\  --include <glob> (repeatable)
+        \\  --exclude <glob> (repeatable)
         \\  --max-depth <n>
         \\  --max-files <n>
         \\  --max-bytes <n>
         \\  --changed (scan only changed tracked/staged files)
+        \\  --base <ref> (changed scan relative to merge-base with ref)
         \\  --all (disable changed-only mode)
         \\  --force (for `init`: overwrite existing .ztx.toml)
         \\  --dry-run (for `init`: print config to stdout)
@@ -281,9 +379,11 @@ pub fn printHelp() !void {
         \\Examples:
         \\  ztx
         \\  ztx --stats --no-content
+        \\  ztx --color never
         \\  ztx --scan-mode full --path src --path build.zig
         \\  ztx --format markdown --profile llm
-        \\  ztx --changed --format json
+        \\  ztx --changed --base origin/main --format json --strict-json
+        \\  ztx --include "src/**" --exclude "**/*.min.js" --sort size --top-files 50
         \\  ztx init --dry-run
         \\  ztx init --force
         \\
@@ -312,15 +412,24 @@ test "parse supports value flags and repeatable paths" {
     var parsed = try parseArgsFrom(allocator, &.{
         "ztx",
         "--format=json",
+        "--strict-json",
+        "--compact",
+        "--sort=size",
         "--color",
         "always",
         "--path",
         "src",
         "--path=build.zig",
+        "--include=src/**",
+        "--exclude",
+        "**/*.bin",
+        "--base",
+        "origin/main",
         "--max-depth",
         "2",
         "--max-files=20",
         "--max-bytes=1024",
+        "--top-files=10",
         "--changed",
     });
     defer parsed.deinit(allocator);
@@ -330,9 +439,16 @@ test "parse supports value flags and repeatable paths" {
             try std.testing.expectEqual(types.OutputFormat.json, run.output_format.?);
             try std.testing.expectEqual(types.ColorMode.always, run.color_mode.?);
             try std.testing.expectEqual(@as(usize, 2), run.paths.items.len);
+            try std.testing.expectEqual(@as(usize, 1), run.include_patterns.items.len);
+            try std.testing.expectEqual(@as(usize, 1), run.exclude_patterns.items.len);
+            try std.testing.expectEqualStrings("origin/main", run.changed_base.?);
             try std.testing.expectEqual(@as(usize, 2), run.max_depth.?);
             try std.testing.expectEqual(@as(usize, 20), run.max_files.?);
             try std.testing.expectEqual(@as(usize, 1024), run.max_bytes.?);
+            try std.testing.expectEqual(@as(usize, 10), run.top_files.?);
+            try std.testing.expectEqual(types.SortMode.size, run.sort_mode.?);
+            try std.testing.expectEqual(@as(?bool, true), run.strict_json);
+            try std.testing.expectEqual(@as(?bool, true), run.compact);
             try std.testing.expectEqual(@as(?bool, true), run.changed_only);
         },
         else => return error.TestUnexpectedResult,
@@ -362,6 +478,20 @@ test "parse init command supports force and dry-run flags" {
         .init => |init| {
             try std.testing.expect(init.force);
             try std.testing.expect(init.dry_run);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "parse --all resets changed flags" {
+    const allocator = std.testing.allocator;
+    var parsed = try parseArgsFrom(allocator, &.{ "ztx", "--base", "origin/main", "--all" });
+    defer parsed.deinit(allocator);
+
+    switch (parsed.command) {
+        .run => |run| {
+            try std.testing.expectEqual(@as(?bool, false), run.changed_only);
+            try std.testing.expect(run.changed_base == null);
         },
         else => return error.TestUnexpectedResult,
     }

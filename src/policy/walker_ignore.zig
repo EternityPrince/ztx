@@ -188,6 +188,15 @@ pub fn shouldScanFile(name: []const u8, scan_mode: types.ScanMode) bool {
     };
 }
 
+pub fn matchesPathPattern(pattern: []const u8, rel_path: []const u8) bool {
+    if (std.mem.indexOfScalar(u8, pattern, '/') != null) {
+        return wildcardMatch(pattern, rel_path, true);
+    }
+
+    const base_name = std.fs.path.basename(rel_path);
+    return wildcardMatch(pattern, base_name, false);
+}
+
 fn matchesDefaultSources(name: []const u8) bool {
     const extension = std.fs.path.extension(name);
 
@@ -292,4 +301,10 @@ test "shouldScanFile obeys scan mode" {
     try std.testing.expect(shouldScanFile("main.zig", .default));
     try std.testing.expect(!shouldScanFile("archive.bin", .default));
     try std.testing.expect(shouldScanFile("archive.bin", .full));
+}
+
+test "matchesPathPattern supports basename and path patterns" {
+    try std.testing.expect(matchesPathPattern("*.zig", "src/main.zig"));
+    try std.testing.expect(matchesPathPattern("src/**/*.zig", "src/render/render.zig"));
+    try std.testing.expect(!matchesPathPattern("src/**/*.zig", "pkg/render.zig"));
 }

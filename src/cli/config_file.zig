@@ -5,10 +5,15 @@ pub const ScanPatch = struct {
     scan_mode: ?types.ScanMode = null,
     has_paths: bool = false,
     paths: std.ArrayList([]const u8) = .empty,
+    has_include_patterns: bool = false,
+    include_patterns: std.ArrayList([]const u8) = .empty,
+    has_exclude_patterns: bool = false,
+    exclude_patterns: std.ArrayList([]const u8) = .empty,
     max_depth: ?usize = null,
     max_files: ?usize = null,
     max_bytes: ?usize = null,
     changed_only: ?bool = null,
+    changed_base: ?[]const u8 = null,
 
     pub fn deinit(self: *ScanPatch, allocator: std.mem.Allocator) void {
         if (self.has_paths) {
@@ -16,6 +21,18 @@ pub const ScanPatch = struct {
             self.paths.deinit(allocator);
             self.has_paths = false;
         }
+        if (self.has_include_patterns) {
+            for (self.include_patterns.items) |pattern| allocator.free(pattern);
+            self.include_patterns.deinit(allocator);
+            self.has_include_patterns = false;
+        }
+        if (self.has_exclude_patterns) {
+            for (self.exclude_patterns.items) |pattern| allocator.free(pattern);
+            self.exclude_patterns.deinit(allocator);
+            self.has_exclude_patterns = false;
+        }
+        if (self.changed_base) |base| allocator.free(base);
+        self.changed_base = null;
     }
 };
 
@@ -25,6 +42,10 @@ pub const OutputPatch = struct {
     show_stats: ?bool = null,
     color_mode: ?types.ColorMode = null,
     output_format: ?types.OutputFormat = null,
+    strict_json: ?bool = null,
+    compact: ?bool = null,
+    sort_mode: ?types.SortMode = null,
+    top_files: ?usize = null,
 };
 
 pub const ProfilePatch = struct {
@@ -162,6 +183,16 @@ fn applyScanKey(allocator: std.mem.Allocator, patch: *ScanPatch, key: []const u8
         return;
     }
 
+    if (std.mem.eql(u8, key, "include")) {
+        try replaceIncludes(allocator, patch, value);
+        return;
+    }
+
+    if (std.mem.eql(u8, key, "exclude")) {
+        try replaceExcludes(allocator, patch, value);
+        return;
+    }
+
     if (std.mem.eql(u8, key, "max_depth")) {
         patch.max_depth = try parseUsize(value);
         return;
@@ -179,6 +210,13 @@ fn applyScanKey(allocator: std.mem.Allocator, patch: *ScanPatch, key: []const u8
 
     if (std.mem.eql(u8, key, "changed")) {
         patch.changed_only = try parseBool(value);
+        return;
+    }
+
+    if (std.mem.eql(u8, key, "changed_base")) {
+        if (patch.changed_base) |existing| allocator.free(existing);
+        patch.changed_base = try allocator.dupe(u8, try parseString(value));
+        patch.changed_only = true;
         return;
     }
 
@@ -211,6 +249,26 @@ fn applyOutputKey(patch: *OutputPatch, key: []const u8, value: []const u8) !void
         return;
     }
 
+    if (std.mem.eql(u8, key, "strict_json")) {
+        patch.strict_json = try parseBool(value);
+        return;
+    }
+
+    if (std.mem.eql(u8, key, "compact")) {
+        patch.compact = try parseBool(value);
+        return;
+    }
+
+    if (std.mem.eql(u8, key, "sort")) {
+        patch.sort_mode = try types.parseSortMode(try parseString(value));
+        return;
+    }
+
+    if (std.mem.eql(u8, key, "top_files")) {
+        patch.top_files = try parseUsize(value);
+        return;
+    }
+
     return error.InvalidOutputKey;
 }
 
@@ -227,14 +285,49 @@ fn replacePaths(allocator: std.mem.Allocator, patch: *ScanPatch, value: []const 
     patch.paths = parsed_paths;
 }
 
+fn replaceIncludes(allocator: std.mem.Allocator, patch: *ScanPatch, value: []const u8) !void {
+    const parsed_patterns = try parseStringArray(allocator, value);
+    errdefer {
+        for (parsed_patterns.items) |pattern| allocator.free(pattern);
+        var mutable_patterns = parsed_patterns;
+        mutable_patterns.deinit(allocator);
+    }
+
+    if (patch.has_include_patterns) {
+        for (patch.include_patterns.items) |pattern| allocator.free(pattern);
+        patch.include_patterns.deinit(allocator);
+    }
+    patch.has_include_patterns = true;
+    patch.include_patterns = parsed_patterns;
+}
+
+fn replaceExcludes(allocator: std.mem.Allocator, patch: *ScanPatch, value: []const u8) !void {
+    const parsed_patterns = try parseStringArray(allocator, value);
+    errdefer {
+        for (parsed_patterns.items) |pattern| allocator.free(pattern);
+        var mutable_patterns = parsed_patterns;
+        mutable_patterns.deinit(allocator);
+    }
+
+    if (patch.has_exclude_patterns) {
+        for (patch.exclude_patterns.items) |pattern| allocator.free(pattern);
+        patch.exclude_patterns.deinit(allocator);
+    }
+    patch.has_exclude_patterns = true;
+    patch.exclude_patterns = parsed_patterns;
+}
+
 fn isScanKey(key: []const u8) bool {
     return std.mem.eql(u8, key, "mode") or
         std.mem.eql(u8, key, "scan_mode") or
         std.mem.eql(u8, key, "paths") or
+        std.mem.eql(u8, key, "include") or
+        std.mem.eql(u8, key, "exclude") or
         std.mem.eql(u8, key, "max_depth") or
         std.mem.eql(u8, key, "max_files") or
         std.mem.eql(u8, key, "max_bytes") or
-        std.mem.eql(u8, key, "changed");
+        std.mem.eql(u8, key, "changed") or
+        std.mem.eql(u8, key, "changed_base");
 }
 
 fn isOutputKey(key: []const u8) bool {
@@ -242,7 +335,11 @@ fn isOutputKey(key: []const u8) bool {
         std.mem.eql(u8, key, "content") or
         std.mem.eql(u8, key, "stats") or
         std.mem.eql(u8, key, "color") or
-        std.mem.eql(u8, key, "format");
+        std.mem.eql(u8, key, "format") or
+        std.mem.eql(u8, key, "strict_json") or
+        std.mem.eql(u8, key, "compact") or
+        std.mem.eql(u8, key, "sort") or
+        std.mem.eql(u8, key, "top_files");
 }
 
 fn parseBool(raw: []const u8) !bool {
@@ -343,10 +440,13 @@ pub fn defaultTemplate() []const u8 {
         \\[scan]
         \\mode = "default"
         \\paths = ["."]
+        \\include = []
+        \\exclude = []
         \\max_depth = 12
         \\max_files = 5000
         \\max_bytes = 20000000
         \\changed = false
+        \\# changed_base = "origin/main"
         \\
         \\[output]
         \\tree = true
@@ -354,6 +454,10 @@ pub fn defaultTemplate() []const u8 {
         \\stats = true
         \\format = "text"
         \\color = "auto"
+        \\strict_json = false
+        \\compact = false
+        \\sort = "name"
+        \\top_files = 200
         \\
         \\[profiles.review]
         \\tree = true
@@ -399,8 +503,11 @@ test "parseToml reads scan output and profile sections" {
         \\[scan]
         \\mode = "full"
         \\paths = ["src", "build.zig"]
+        \\include = ["src/**"]
+        \\exclude = ["**/*.bin"]
         \\max_depth = 2
         \\changed = true
+        \\changed_base = "origin/main"
         \\
         \\[output]
         \\tree = true
@@ -408,6 +515,10 @@ test "parseToml reads scan output and profile sections" {
         \\stats = true
         \\format = "json"
         \\color = "never"
+        \\strict_json = true
+        \\compact = true
+        \\sort = "size"
+        \\top_files = 50
         \\
         \\[profiles.custom]
         \\content = true
@@ -419,11 +530,20 @@ test "parseToml reads scan output and profile sections" {
     try std.testing.expectEqual(types.ScanMode.full, parsed.scan.scan_mode.?);
     try std.testing.expect(parsed.scan.has_paths);
     try std.testing.expectEqual(@as(usize, 2), parsed.scan.paths.items.len);
+    try std.testing.expect(parsed.scan.has_include_patterns);
+    try std.testing.expect(parsed.scan.has_exclude_patterns);
+    try std.testing.expectEqual(@as(usize, 1), parsed.scan.include_patterns.items.len);
+    try std.testing.expectEqual(@as(usize, 1), parsed.scan.exclude_patterns.items.len);
     try std.testing.expectEqual(@as(?usize, 2), parsed.scan.max_depth);
     try std.testing.expectEqual(@as(?bool, true), parsed.scan.changed_only);
+    try std.testing.expectEqualStrings("origin/main", parsed.scan.changed_base.?);
 
     try std.testing.expectEqual(types.OutputFormat.json, parsed.output.output_format.?);
     try std.testing.expectEqual(types.ColorMode.never, parsed.output.color_mode.?);
+    try std.testing.expectEqual(@as(?bool, true), parsed.output.strict_json);
+    try std.testing.expectEqual(@as(?bool, true), parsed.output.compact);
+    try std.testing.expectEqual(types.SortMode.size, parsed.output.sort_mode.?);
+    try std.testing.expectEqual(@as(?usize, 50), parsed.output.top_files);
 
     const custom = parsed.getProfile("custom").?;
     try std.testing.expectEqual(@as(?bool, true), custom.output.show_content);

@@ -115,6 +115,25 @@ pub fn build(b: *std.Build) void {
         run_cmd.addArgs(args);
     }
 
+    const bench_exe = b.addExecutable(.{
+        .name = "ztx-bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/bench.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "ztx", .module = mod },
+            },
+        }),
+    });
+
+    const bench_run = b.addRunArtifact(bench_exe);
+    const bench_step = b.step("bench", "Run micro-benchmarks");
+    bench_step.dependOn(&bench_run.step);
+    if (b.args) |args| {
+        bench_run.addArgs(args);
+    }
+
     // Creates an executable that will run `test` blocks from the provided module.
     // Here `mod` needs to define a target, which is why earlier we made sure to
     // set the releative field.
@@ -135,12 +154,18 @@ pub fn build(b: *std.Build) void {
     // A run step that will run the second test executable.
     const run_exe_tests = b.addRunArtifact(exe_tests);
 
+    const bench_tests = b.addTest(.{
+        .root_module = bench_exe.root_module,
+    });
+    const run_bench_tests = b.addRunArtifact(bench_tests);
+
     // A top level step for running all tests. dependOn can be called multiple
     // times and since the two run steps do not depend on one another, this will
     // make the two of them run in parallel.
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
+    test_step.dependOn(&run_bench_tests.step);
 
     // Just like flags, top level steps are also listed in the `--help` menu.
     //

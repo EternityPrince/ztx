@@ -35,20 +35,36 @@ fn scanConfiguredPaths(allocator: std.mem.Allocator, config: *const cli.Config, 
 
         const stat = std.fs.cwd().statFile(path) catch |err| switch (err) {
             error.FileNotFound => continue,
+            error.AccessDenied => {
+                result.skipped.permission += 1;
+                continue;
+            },
             else => return err,
         };
 
         switch (stat.kind) {
             .directory => {
+                if (isExcludedPath(config, path)) continue;
+
                 try addDirectoryEntry(allocator, result, &known_dirs, path, pathDepth(path));
 
-                var dir = try std.fs.cwd().openDir(path, .{ .iterate = true });
+                var dir = std.fs.cwd().openDir(path, .{ .iterate = true }) catch |err| switch (err) {
+                    error.AccessDenied => {
+                        result.skipped.permission += 1;
+                        continue;
+                    },
+                    else => return err,
+                };
                 defer dir.close();
 
                 try walkDir(allocator, &dir, path, pathDepth(path) + 1, result, config, &gitignore, &known_dirs);
             },
             .file => {
+                if (!shouldIncludeFile(config, path)) continue;
                 try scanSingleFilePath(allocator, path, pathDepth(path), result, config, &gitignore, &known_dirs);
+            },
+            .sym_link => {
+                result.skipped.symlink += 1;
             },
             else => {},
         }
@@ -67,7 +83,16 @@ fn walkDir(
 ) !void {
     var iterator = dir.iterate();
 
-    while (try iterator.next()) |entry| {
+    while (true) {
+        const next_entry = iterator.next() catch |err| switch (err) {
+            error.AccessDenied => {
+                result.skipped.permission += 1;
+                continue;
+            },
+            else => return err,
+        };
+        const entry = next_entry orelse break;
+
         const rel_path = try helper.joinRelativePath(allocator, prefix, entry.name);
         defer allocator.free(rel_path);
 
@@ -78,6 +103,13 @@ fn walkDir(
             }
             continue;
         }
+
+        if (entry.kind == .sym_link) {
+            result.skipped.symlink += 1;
+            continue;
+        }
+
+        if (isExcludedPath(config, rel_path)) continue;
 
         switch (entry.kind) {
             .directory => {
@@ -90,12 +122,19 @@ fn walkDir(
                     }
                 }
 
-                var child = try dir.openDir(entry.name, .{ .iterate = true });
+                var child = dir.openDir(entry.name, .{ .iterate = true }) catch |err| switch (err) {
+                    error.AccessDenied => {
+                        result.skipped.permission += 1;
+                        continue;
+                    },
+                    else => return err,
+                };
                 defer child.close();
 
                 try walkDir(allocator, &child, rel_path, depth + 1, result, config, gitignore, known_dirs);
             },
             .file => {
+                if (!shouldIncludeFile(config, rel_path)) continue;
                 try scanFileFromDir(allocator, dir, entry.name, rel_path, depth, result, config);
             },
             else => {},
@@ -110,7 +149,7 @@ fn scanChangedFiles(allocator: std.mem.Allocator, config: *const cli.Config, res
     var known_dirs = std.StringHashMap(void).init(allocator);
     defer known_dirs.deinit();
 
-    var changed_paths = try collectChangedPaths(allocator);
+    var changed_paths = try collectChangedPaths(allocator, config.changed_base);
     defer {
         for (changed_paths.items) |path| allocator.free(path);
         changed_paths.deinit(allocator);
@@ -118,12 +157,22 @@ fn scanChangedFiles(allocator: std.mem.Allocator, config: *const cli.Config, res
 
     for (changed_paths.items) |path| {
         if (!pathInScope(path, config.paths.items)) continue;
+        if (isExcludedPath(config, path)) continue;
+        if (!shouldIncludeFile(config, path)) continue;
 
         const stat = std.fs.cwd().statFile(path) catch |err| switch (err) {
             error.FileNotFound => continue,
+            error.AccessDenied => {
+                result.skipped.permission += 1;
+                continue;
+            },
             else => return err,
         };
 
+        if (stat.kind == .sym_link) {
+            result.skipped.symlink += 1;
+            continue;
+        }
         if (stat.kind != .file) continue;
 
         const base_name = std.fs.path.basename(path);
@@ -180,7 +229,13 @@ fn scanSingleFilePath(
         }
     }
 
-    var file = try std.fs.cwd().openFile(rel_path, .{});
+    var file = std.fs.cwd().openFile(rel_path, .{}) catch |err| switch (err) {
+        error.AccessDenied => {
+            result.skipped.permission += 1;
+            return;
+        },
+        else => return err,
+    };
     defer file.close();
 
     try appendFile(allocator, &file, base_name, rel_path, depth, result, config);
@@ -214,7 +269,13 @@ fn scanFileFromDir(
         }
     }
 
-    var file = try dir.openFile(name, .{});
+    var file = dir.openFile(name, .{}) catch |err| switch (err) {
+        error.AccessDenied => {
+            result.skipped.permission += 1;
+            return;
+        },
+        else => return err,
+    };
     defer file.close();
 
     try appendFile(allocator, &file, name, rel_path, depth, result, config);
@@ -320,11 +381,15 @@ fn ensureParentDirs(
     }
 }
 
-fn collectChangedPaths(allocator: std.mem.Allocator) !std.ArrayList([]const u8) {
-    return collectChangedPathsInCwd(allocator, null);
+fn collectChangedPaths(allocator: std.mem.Allocator, base_ref: ?[]const u8) !std.ArrayList([]const u8) {
+    return collectChangedPathsInCwd(allocator, null, base_ref);
 }
 
-fn collectChangedPathsInCwd(allocator: std.mem.Allocator, cwd: ?[]const u8) !std.ArrayList([]const u8) {
+fn collectChangedPathsInCwd(
+    allocator: std.mem.Allocator,
+    cwd: ?[]const u8,
+    base_ref: ?[]const u8,
+) !std.ArrayList([]const u8) {
     var set = std.StringHashMap(void).init(allocator);
     defer set.deinit();
 
@@ -332,6 +397,12 @@ fn collectChangedPathsInCwd(allocator: std.mem.Allocator, cwd: ?[]const u8) !std
     errdefer {
         for (list.items) |path| allocator.free(path);
         list.deinit(allocator);
+    }
+
+    if (base_ref) |base| {
+        const merge_base_spec = try std.fmt.allocPrint(allocator, "{s}...HEAD", .{base});
+        defer allocator.free(merge_base_spec);
+        try collectGitDiffPaths(allocator, &set, &list, &.{ "git", "diff", "--name-only", merge_base_spec }, cwd);
     }
 
     try collectGitDiffPaths(allocator, &set, &list, &.{ "git", "diff", "--name-only" }, cwd);
@@ -397,6 +468,26 @@ fn pathDepth(path: []const u8) usize {
     return depth;
 }
 
+fn shouldIncludeFile(config: *const cli.Config, rel_path: []const u8) bool {
+    if (isExcludedPath(config, rel_path)) return false;
+
+    if (config.include_patterns.items.len == 0) return true;
+    return patternMatchesAny(config.include_patterns.items, rel_path);
+}
+
+fn isExcludedPath(config: *const cli.Config, rel_path: []const u8) bool {
+    if (config.exclude_patterns.items.len == 0) return false;
+    return patternMatchesAny(config.exclude_patterns.items, rel_path);
+}
+
+fn patternMatchesAny(patterns: []const []const u8, rel_path: []const u8) bool {
+    for (patterns) |pattern| {
+        if (pattern.len == 0) continue;
+        if (policy.matchesPathPattern(pattern, rel_path)) return true;
+    }
+    return false;
+}
+
 fn pathInScope(path: []const u8, scopes: []const []const u8) bool {
     for (scopes) |scope| {
         if (std.mem.eql(u8, scope, ".")) return true;
@@ -455,6 +546,13 @@ fn makeTestConfig(allocator: std.mem.Allocator) !cli.Config {
         .max_bytes = null,
         .max_content_bytes = 1024 * 1024,
         .changed_only = false,
+        .changed_base = null,
+        .include_patterns = std.ArrayList([]const u8).empty,
+        .exclude_patterns = std.ArrayList([]const u8).empty,
+        .strict_json = false,
+        .compact = false,
+        .sort_mode = .name,
+        .top_files = null,
         .profile_name = null,
     };
     try config.paths.append(allocator, try allocator.dupe(u8, "."));
@@ -566,6 +664,77 @@ test "scan full mode skips binary files by content" {
     try std.testing.expectEqual(@as(usize, 1), result.skipped.binary_or_unsupported);
 }
 
+test "scan applies include and exclude patterns" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    try tmp.dir.makePath("src");
+    try tmp.dir.makePath("pkg");
+    try tmp.dir.writeFile(.{ .sub_path = "src/main.zig", .data = "const a = 1;\n" });
+    try tmp.dir.writeFile(.{ .sub_path = "src/generated.zig", .data = "const b = 2;\n" });
+    try tmp.dir.writeFile(.{ .sub_path = "pkg/lib.zig", .data = "const c = 3;\n" });
+
+    var config = try makeTestConfig(allocator);
+    defer config.deinit(allocator);
+    try config.include_patterns.append(allocator, try allocator.dupe(u8, "src/**/*.zig"));
+    try config.exclude_patterns.append(allocator, try allocator.dupe(u8, "src/generated.zig"));
+
+    var result = try runWalkForTest(allocator, &tmp.dir, &config);
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), result.total_files);
+    switch (result.entries.items[result.entries.items.len - 1]) {
+        .file => |file| try std.testing.expectEqualStrings("src/main.zig", file.path),
+        .dir => return error.TestUnexpectedResult,
+    }
+}
+
+test "scan counts symlink as skipped" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{ .sub_path = "target.zig", .data = "const x = 1;\n" });
+    std.posix.symlinkat("target.zig", tmp.dir.fd, "link.zig") catch |err| switch (err) {
+        error.AccessDenied, error.OperationNotSupported, error.PermissionDenied => return,
+        else => return err,
+    };
+
+    var config = try makeTestConfig(allocator);
+    defer config.deinit(allocator);
+
+    var result = try runWalkForTest(allocator, &tmp.dir, &config);
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), result.skipped.symlink);
+}
+
+test "scan counts permission-denied files as skipped" {
+    if (!std.fs.has_executable_bit) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{ .sub_path = "ok.zig", .data = "const x = 1;\n" });
+    try tmp.dir.writeFile(.{ .sub_path = "private.zig", .data = "const y = 2;\n" });
+
+    std.posix.fchmodat(tmp.dir.fd, "private.zig", 0, 0) catch |err| switch (err) {
+        error.AccessDenied, error.PermissionDenied, error.OperationNotSupported => return error.SkipZigTest,
+        else => return err,
+    };
+    defer std.posix.fchmodat(tmp.dir.fd, "private.zig", 0o644, 0) catch {};
+
+    var config = try makeTestConfig(allocator);
+    defer config.deinit(allocator);
+
+    var result = try runWalkForTest(allocator, &tmp.dir, &config);
+    defer result.deinit(allocator);
+
+    try std.testing.expect(result.skipped.permission > 0);
+}
+
 test "scan counts depth and byte limits" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{ .iterate = true });
@@ -597,5 +766,5 @@ test "changed scan reports git unavailable outside repository" {
     const cwd = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
     defer allocator.free(cwd);
 
-    try std.testing.expectError(error.GitUnavailable, collectChangedPathsInCwd(allocator, cwd));
+    try std.testing.expectError(error.GitUnavailable, collectChangedPathsInCwd(allocator, cwd, null));
 }

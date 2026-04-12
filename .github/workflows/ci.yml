@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+
+      - name: Run tests
+        run: zig build test --summary all
+
+      - name: Help smoke-test
+        run: zig build run -- --help
+
+      - name: Benchmark smoke-test
+        run: zig build bench -- --max-small-ms 80 --max-large-ms 500 --max-small-mib 16 --max-large-mib 96

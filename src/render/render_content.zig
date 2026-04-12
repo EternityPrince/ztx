@@ -4,24 +4,32 @@ const RenderContext = @import("context.zig").RenderContext;
 const ansi = @import("style.zig").ansi;
 const Style = @import("style.zig").Style;
 
-pub fn printContent(writer: anytype, result: *const model.ScanResult, context: RenderContext) !void {
+pub fn printContent(
+    writer: anytype,
+    files: []const *const model.FileInfo,
+    context: RenderContext,
+    compact: bool,
+) !void {
     const style = context.style;
     try style.write(writer, ansi.section, "FILES\n");
 
-    for (result.entries.items) |entry| {
-        switch (entry) {
-            .dir => {},
-            .file => |file| {
-                try style.write(writer, ansi.separator, "===== ");
-                try style.write(writer, ansi.path, file.path);
-                try style.write(writer, ansi.separator, " =====\n");
+    for (files, 0..) |file, index| {
+        if (compact) {
+            try style.write(writer, ansi.path, "-- ");
+            try style.write(writer, ansi.path, file.path);
+            try writer.writeAll("\n");
+        } else {
+            try style.write(writer, ansi.separator, "===== ");
+            try style.write(writer, ansi.path, file.path);
+            try style.write(writer, ansi.separator, " =====\n");
+        }
 
-                if (file.content) |content| {
-                    try writeNumberedContent(writer, style, content, file.line_count);
-                }
+        if (file.content) |content| {
+            try writeNumberedContent(writer, style, content, file.line_count);
+        }
 
-                try writer.writeAll("\n");
-            },
+        if (!compact or index + 1 < files.len) {
+            try writer.writeAll("\n");
         }
     }
 }

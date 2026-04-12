@@ -1,17 +1,17 @@
 # ztx
 
 `ztx` is a fast repository scanner for codebase context.
-It helps you quickly understand project structure, file contents, and language mix in one command.
+It gives predictable snapshots of structure, stats, and file content for common workflows (`review`, `llm`, `stats`) in one command.
 
 ## Why ztx
 
 Use `ztx` when you want to:
-- get a quick tree + summary of an unfamiliar repo
-- prepare compact context for LLM prompts or review sessions
-- analyze file types and repository size at a glance
-- scan only changed files in daily workflows
+- get useful repo context in under a minute
+- review unfamiliar codebases with clear skipped-reason visibility
+- generate compact LLM input in `markdown` or `json`
+- focus only on changed files during daily iteration
 
-## Install And Run (3 Steps)
+## Install and run (3 steps)
 
 1. Build and install:
 
@@ -27,26 +27,26 @@ zig build -Doptimize=ReleaseFast --prefix "$HOME/.local"
 ztx
 ```
 
-## Five Real Examples
+## Five real examples
 
 ```bash
-# 1) Quick overview (summary + tree + files)
+# 1) Quick overview
 ztx
 
 # 2) Stats only
 ztx --stats --no-content --no-tree
 
-# 3) Full scan mode + scoped paths
+# 3) Full scan over selected paths
 ztx --scan-mode full --path src --path build.zig
 
-# 4) LLM-friendly markdown preset
-ztx --profile llm
+# 4) LLM-focused markdown profile
+ztx --profile llm --format markdown
 
-# 5) Changed files only in JSON
-ztx --changed --format json
+# 5) Changed files since main in strict JSON
+ztx --changed --base origin/main --format json --strict-json
 ```
 
-## CLI Highlights
+## CLI highlights
 
 - Backward-compatible flags: `-no-tree`, `-no-content`, `-no-stats`, `-no-color`, `-full`
 - Preferred flags:
@@ -56,10 +56,16 @@ ztx --changed --format json
   - `--color auto|always|never`
   - `--scan-mode default|full`
   - `--format text|markdown|json`
+  - `--strict-json / --no-strict-json`
+  - `--compact / --no-compact`
+  - `--sort name|size|lines`
+  - `--top-files <n>`
   - `--profile review|llm|stats|<custom>`
   - `--path <dir-or-file>` (repeatable)
+  - `--include <glob>` (repeatable)
+  - `--exclude <glob>` (repeatable)
   - `--max-depth <n>`, `--max-files <n>`, `--max-bytes <n>`
-  - `--changed`
+  - `--changed`, `--base <ref>`, `--all`
 
 ## Config (`.ztx.toml`)
 
@@ -89,27 +95,91 @@ Resolution order:
 
 Supported sections:
 
-- `[scan]`: `mode`, `paths`, `max_depth`, `max_files`, `max_bytes`, `changed`
-- `[output]`: `tree`, `content`, `stats`, `format`, `color`
-- `[profiles.<name>]`: profile-specific overrides
+- `[scan]`: `mode`, `paths`, `include`, `exclude`, `max_depth`, `max_files`, `max_bytes`, `changed`, `changed_base`
+- `[output]`: `tree`, `content`, `stats`, `format`, `color`, `strict_json`, `compact`, `sort`, `top_files`
+- `[profiles.<name>]`: profile-specific overrides (same keys as above)
 
-## Output Modes
+## Profiles
 
-- `text` (default): colorful terminal-oriented output
-- `markdown`: prompt/report-friendly output
+Built-in profiles:
+- `review`
+- `llm`
+- `stats`
+
+Custom profiles can be defined in `.ztx.toml` under `[profiles.<name>]` and used via `--profile <name>`.
+
+## Output modes
+
+- `text` (default): terminal output
+- `markdown`: report/prompt-ready output
 - `json`: structured output for tooling/automation
 
 Stable JSON top-level keys:
+- `summary { files, dirs, lines, bytes }`
+- `types[]`
+- `tree[]`
+- `files[]`
+- `skipped { gitignore, builtin, binary, size_limit, depth_limit, file_limit, symlink, permission }`
 
-- `summary`
-- `types`
-- `tree`
-- `files`
-- `skipped`
+`--strict-json` validates emitted JSON shape before printing.
 
-## Safety Defaults
+## Changed mode
+
+- `--changed`: scan tracked changed files (unstaged + staged)
+- `--base <ref>`: include diff against merge-base with `<ref>` (for example `origin/main`)
+- `--all`: disable changed-only mode
+
+If git metadata is unavailable, `ztx` exits with an actionable fallback message.
+
+## Safety and trust defaults
 
 - `.gitignore` is respected
 - common generated/binary artifacts are skipped by built-in policy
-- file contents larger than `1 MiB` are skipped by default (size still counted)
-- skip counters are included under `SKIPPED`/`skipped`
+- file contents larger than `1 MiB` are skipped by default (stats still counted)
+- symlinks are never traversed; they are counted under `skipped.symlink`
+- permission-denied paths are skipped and counted under `skipped.permission`
+- skipped counters are shown by reason:
+  - `gitignore`
+  - `built-in ignore`
+  - `binary/unsupported`
+  - `size limit`
+  - `depth/file limits`
+  - `symlink`
+  - `permission`
+
+## Testing
+
+Core test command:
+
+```bash
+zig build test
+```
+
+Visible test summary:
+
+```bash
+zig build test --summary all
+```
+
+This runs unit/integration tests across:
+- CLI parsing and config precedence
+- walker policies (`include`/`exclude`, `changed`, symlink/permission counters, limits)
+- render contracts (text/markdown/json + strict JSON schema validation)
+- benchmark argument and regression-gate logic
+
+Smoke and regression checks:
+
+```bash
+zig build run -- --help
+zig build run -- --format json --strict-json --top-files 3 --sort lines --no-tree --no-content
+zig build bench -- --max-small-ms 80 --max-large-ms 500 --max-small-mib 16 --max-large-mib 96
+```
+
+## Bench and release
+
+- micro-benchmark: `zig build bench`
+- regression gate example: `zig build bench -- --max-small-ms 80 --max-large-ms 500 --max-small-mib 16 --max-large-mib 96`
+- CI: [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
+- release pipeline: [`.github/workflows/release.yml`](.github/workflows/release.yml)
+- release checklist: [`RELEASING.md`](RELEASING.md)
+- Homebrew packaging notes: [`packaging/homebrew/README.md`](packaging/homebrew/README.md)

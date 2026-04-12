@@ -68,6 +68,8 @@ pub fn printStats(writer: anytype, result: *const model.ScanResult, context: Ren
     try printMetric(writer, style, "size limit", result.skipped.size_limit);
     try printMetric(writer, style, "depth limit", result.skipped.depth_limit);
     try printMetric(writer, style, "file limit", result.skipped.file_limit);
+    try printMetric(writer, style, "symlink", result.skipped.symlink);
+    try printMetric(writer, style, "permission", result.skipped.permission);
 }
 
 fn printMetric(writer: anytype, style: Style, label: []const u8, value: usize) !void {

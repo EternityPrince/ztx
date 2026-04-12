@@ -1,0 +1,134 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+
+      - name: Run tests
+        run: zig build test --summary all
+
+      - name: Help smoke-test
+        run: zig build run -- --help
+
+      - name: Benchmark regression gate
+        run: zig build bench -- --max-small-ms 80 --max-large-ms 500 --max-small-mib 16 --max-large-mib 96
+
+  build:
+    needs: preflight
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-linux
+            archive: tar.gz
+          - os: macos-latest
+            target: aarch64-macos
+            archive: tar.gz
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+
+      - name: Build release binary
+        run: zig build -Doptimize=ReleaseFast -Dtarget=${{ matrix.target }} --prefix dist
+
+      - name: Smoke release binary
+        if: ${{ (matrix.target == 'x86_64-linux' && runner.os == 'Linux' && runner.arch == 'X64') || (matrix.target == 'aarch64-macos' && runner.os == 'macOS' && runner.arch == 'ARM64') }}
+        run: dist/bin/ztx --help > /dev/null
+
+      - name: Package artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          VERSION="${GITHUB_REF_NAME#v}"
+          NAME="ztx-${VERSION}-${{ matrix.target }}"
+          cp dist/bin/ztx "artifacts/ztx"
+          tar -C artifacts -czf "artifacts/${NAME}.${{ matrix.archive }}" ztx
+          rm artifacts/ztx
+
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "artifacts/${NAME}.${{ matrix.archive }}" > "artifacts/${NAME}.${{ matrix.archive }}.sha256"
+          else
+            shasum -a 256 "artifacts/${NAME}.${{ matrix.archive }}" > "artifacts/${NAME}.${{ matrix.archive }}.sha256"
+          fi
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ztx-${{ matrix.target }}
+          path: artifacts/*
+
+  publish:
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist-artifacts
+
+      - name: Generate changelog
+        shell: bash
+        run: |
+          set -euo pipefail
+          CURRENT_TAG="${GITHUB_REF_NAME}"
+          PREV_TAG="$(git describe --tags --abbrev=0 "${CURRENT_TAG}^" 2>/dev/null || true)"
+
+          {
+            echo "# ztx ${CURRENT_TAG}"
+            echo
+            echo "## Changelog"
+            echo
+            if [[ -n "${PREV_TAG}" ]]; then
+              git log --pretty='- %s (%h)' "${PREV_TAG}..${CURRENT_TAG}"
+            else
+              git log --pretty='- %s (%h)' "${CURRENT_TAG}"
+            fi
+            echo
+            echo "## Artifacts"
+            echo
+            echo "- Prebuilt archives are attached to this release."
+            echo "- SHA256 checksums are provided in matching .sha256 files."
+          } > CHANGELOG.md
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: CHANGELOG.md
+          files: |
+            dist-artifacts/**/*.tar.gz
+            dist-artifacts/**/*.sha256

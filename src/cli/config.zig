@@ -6,6 +6,7 @@ const config_file = @import("config_file.zig");
 pub const ScanMode = types.ScanMode;
 pub const ColorMode = types.ColorMode;
 pub const OutputFormat = types.OutputFormat;
+pub const SortMode = types.SortMode;
 
 const default_max_content_bytes: usize = 1024 * 1024;
 
@@ -23,13 +24,25 @@ pub const Config = struct {
     max_bytes: ?usize,
     max_content_bytes: usize,
     changed_only: bool,
+    changed_base: ?[]u8,
+    include_patterns: std.ArrayList([]const u8),
+    exclude_patterns: std.ArrayList([]const u8),
+    strict_json: bool,
+    compact: bool,
+    sort_mode: SortMode,
+    top_files: ?usize,
     profile_name: ?[]u8,
 
     pub fn deinit(self: *Config, allocator: std.mem.Allocator) void {
         for (self.paths.items) |path| allocator.free(path);
         self.paths.deinit(allocator);
+        for (self.include_patterns.items) |pattern| allocator.free(pattern);
+        for (self.exclude_patterns.items) |pattern| allocator.free(pattern);
+        self.include_patterns.deinit(allocator);
+        self.exclude_patterns.deinit(allocator);
 
         if (self.profile_name) |name| allocator.free(name);
+        if (self.changed_base) |base| allocator.free(base);
     }
 
     pub fn fromRunOptions(allocator: std.mem.Allocator, options: parse.RunOptions) !Config {
@@ -76,6 +89,10 @@ pub fn initConfigTemplate() []const u8 {
 fn defaultConfig(allocator: std.mem.Allocator) !Config {
     var paths = std.ArrayList([]const u8).empty;
     errdefer paths.deinit(allocator);
+    var include_patterns = std.ArrayList([]const u8).empty;
+    errdefer include_patterns.deinit(allocator);
+    var exclude_patterns = std.ArrayList([]const u8).empty;
+    errdefer exclude_patterns.deinit(allocator);
 
     try paths.append(allocator, try allocator.dupe(u8, "."));
 
@@ -93,6 +110,13 @@ fn defaultConfig(allocator: std.mem.Allocator) !Config {
         .max_bytes = null,
         .max_content_bytes = default_max_content_bytes,
         .changed_only = false,
+        .changed_base = null,
+        .include_patterns = include_patterns,
+        .exclude_patterns = exclude_patterns,
+        .strict_json = false,
+        .compact = false,
+        .sort_mode = .name,
+        .top_files = null,
         .profile_name = null,
     };
 }
@@ -100,10 +124,17 @@ fn defaultConfig(allocator: std.mem.Allocator) !Config {
 fn applyScanPatch(allocator: std.mem.Allocator, config: *Config, patch: config_file.ScanPatch) !void {
     if (patch.scan_mode) |scan_mode| config.scan_mode = scan_mode;
     if (patch.has_paths) try replacePaths(allocator, config, patch.paths.items);
+    if (patch.has_include_patterns) try replacePatterns(allocator, &config.include_patterns, patch.include_patterns.items);
+    if (patch.has_exclude_patterns) try replacePatterns(allocator, &config.exclude_patterns, patch.exclude_patterns.items);
     if (patch.max_depth) |max_depth| config.max_depth = max_depth;
     if (patch.max_files) |max_files| config.max_files = max_files;
     if (patch.max_bytes) |max_bytes| config.max_bytes = max_bytes;
     if (patch.changed_only) |changed_only| config.changed_only = changed_only;
+    if (patch.changed_base) |changed_base| {
+        if (config.changed_base) |existing| allocator.free(existing);
+        config.changed_base = try allocator.dupe(u8, changed_base);
+        config.changed_only = true;
+    }
 }
 
 fn applyOutputPatch(config: *Config, patch: config_file.OutputPatch) void {
@@ -112,6 +143,10 @@ fn applyOutputPatch(config: *Config, patch: config_file.OutputPatch) void {
     if (patch.show_stats) |show_stats| config.show_stats = show_stats;
     if (patch.color_mode) |color_mode| config.color_mode = color_mode;
     if (patch.output_format) |output_format| config.output_format = output_format;
+    if (patch.strict_json) |strict_json| config.strict_json = strict_json;
+    if (patch.compact) |compact| config.compact = compact;
+    if (patch.sort_mode) |sort_mode| config.sort_mode = sort_mode;
+    if (patch.top_files) |top_files| config.top_files = top_files;
 }
 
 fn applyProfile(
@@ -155,9 +190,26 @@ fn applyCliOverrides(allocator: std.mem.Allocator, config: *Config, options: par
     if (options.max_files) |max_files| config.max_files = max_files;
     if (options.max_bytes) |max_bytes| config.max_bytes = max_bytes;
     if (options.changed_only) |changed_only| config.changed_only = changed_only;
+    if (options.strict_json) |strict_json| config.strict_json = strict_json;
+    if (options.compact) |compact| config.compact = compact;
+    if (options.sort_mode) |sort_mode| config.sort_mode = sort_mode;
+    if (options.top_files) |top_files| config.top_files = top_files;
+    if (options.changed_base) |changed_base| {
+        if (config.changed_base) |existing| allocator.free(existing);
+        config.changed_base = try allocator.dupe(u8, changed_base);
+        config.changed_only = true;
+    }
 
     if (options.paths.items.len > 0) {
         try replacePaths(allocator, config, options.paths.items);
+    }
+
+    if (options.include_patterns.items.len > 0) {
+        try replacePatterns(allocator, &config.include_patterns, options.include_patterns.items);
+    }
+
+    if (options.exclude_patterns.items.len > 0) {
+        try replacePatterns(allocator, &config.exclude_patterns, options.exclude_patterns.items);
     }
 }
 
@@ -188,6 +240,17 @@ fn normalizePath(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     if (path.len == 0) path = ".";
 
     return allocator.dupe(u8, path);
+}
+
+fn replacePatterns(allocator: std.mem.Allocator, target: *std.ArrayList([]const u8), values: []const []const u8) !void {
+    for (target.items) |pattern| allocator.free(pattern);
+    target.clearRetainingCapacity();
+
+    for (values) |raw| {
+        const value = std.mem.trim(u8, raw, " \t");
+        if (value.len == 0) continue;
+        try target.append(allocator, try allocator.dupe(u8, value));
+    }
 }
 
 fn detectColorMode(color_mode: ColorMode, output_format: OutputFormat) bool {
@@ -251,6 +314,12 @@ test "defaults can be overridden by profile and cli flags" {
     options.profile = try allocator.dupe(u8, "stats");
     options.show_content = true;
     options.output_format = .json;
+    options.strict_json = true;
+    options.sort_mode = .size;
+    options.top_files = 25;
+    options.changed_base = try allocator.dupe(u8, "origin/main");
+    try options.include_patterns.append(allocator, try allocator.dupe(u8, "src/**"));
+    try options.exclude_patterns.append(allocator, try allocator.dupe(u8, "**/*.bin"));
 
     var config = try Config.fromRunOptions(allocator, options);
     defer config.deinit(allocator);
@@ -259,4 +328,11 @@ test "defaults can be overridden by profile and cli flags" {
     try std.testing.expect(config.show_content);
     try std.testing.expect(config.show_stats);
     try std.testing.expectEqual(OutputFormat.json, config.output_format);
+    try std.testing.expect(config.strict_json);
+    try std.testing.expectEqual(SortMode.size, config.sort_mode);
+    try std.testing.expectEqual(@as(?usize, 25), config.top_files);
+    try std.testing.expect(config.changed_only);
+    try std.testing.expectEqualStrings("origin/main", config.changed_base.?);
+    try std.testing.expectEqual(@as(usize, 1), config.include_patterns.items.len);
+    try std.testing.expectEqual(@as(usize, 1), config.exclude_patterns.items.len);
 }
