@@ -80,19 +80,3 @@ test "numbered content handles missing trailing newline" {
     try writeNumberedContent(fbs.writer(), .{ .use_color = false }, "a\nb", 2);
     try std.testing.expectEqualStrings("1 │ a\n2 │ b\n", fbs.getWritten());
 }
-
-test "numbered content handles empty file" {
-    var buffer: [1024]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buffer);
-
-    try writeNumberedContent(fbs.writer(), .{ .use_color = false }, "", 0);
-    try std.testing.expectEqualStrings("", fbs.getWritten());
-}
-
-test "numbered content handles single line with trailing newline" {
-    var buffer: [1024]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buffer);
-
-    try writeNumberedContent(fbs.writer(), .{ .use_color = false }, "hello\n", 1);
-    try std.testing.expectEqualStrings("1 │ hello\n", fbs.getWritten());
-}

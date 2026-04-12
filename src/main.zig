@@ -8,18 +8,38 @@ pub fn main() !void {
     defer {
         const status = gpa.deinit();
         if (status == .leak) {
-            std.debug.print("memory leak detected!", .{});
+            std.debug.print("memory leak detected!\n", .{});
         }
     }
 
     const allocator = gpa.allocator();
-    const options = try cli.parseArgs(allocator);
+    var parsed = try cli.parseArgs(allocator);
+    defer parsed.deinit(allocator);
 
-    if (options.show_help) {
-        try cli.printHelp();
-        return;
+    switch (parsed.command) {
+        .help => {
+            try cli.printHelp();
+            return;
+        },
+        .init => {
+            try cli_config.initConfigFile();
+            std.debug.print("Created .ztx.toml\n", .{});
+            return;
+        },
+        .run => |run| {
+            var config = try cli_config.Config.fromRunOptions(allocator, run);
+            defer config.deinit(allocator);
+
+            app.run(allocator, &config) catch |err| switch (err) {
+                error.GitUnavailable => {
+                    std.debug.print(
+                        "git metadata is unavailable. Run inside a git repository or rerun without --changed.\n",
+                        .{},
+                    );
+                    return err;
+                },
+                else => return err,
+            };
+        },
     }
-
-    const config = try cli_config.Config.fromOptions(options);
-    try app.run(allocator, config);
 }

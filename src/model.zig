@@ -2,7 +2,7 @@ const std = @import("std");
 
 pub const FileInfo = struct {
     path: []const u8,
-    extansion: []const u8,
+    extension: []const u8,
     line_count: usize,
     byte_size: usize,
     depth_level: usize,
@@ -14,34 +14,44 @@ pub const DirInfo = struct {
     depth_level: usize,
 };
 
-// Union to exhausively represent the strucrure
 pub const FileDirInfo = union(enum) {
     file: FileInfo,
     dir: DirInfo,
 };
 
-pub const ExtansionStat = struct {
+pub const ExtensionStat = struct {
     count: usize,
     total_lines: usize,
     total_bytes: usize,
 };
 
+pub const SkippedSummary = struct {
+    gitignore: usize = 0,
+    builtin: usize = 0,
+    binary_or_unsupported: usize = 0,
+    size_limit: usize = 0,
+    depth_limit: usize = 0,
+    file_limit: usize = 0,
+};
+
 pub const ScanResult = struct {
     entries: std.ArrayList(FileDirInfo),
-    ext_stats: std.StringHashMap(ExtansionStat),
+    ext_stats: std.StringHashMap(ExtensionStat),
     total_lines: usize,
     total_bytes: usize,
     total_files: usize,
     total_dirs: usize,
+    skipped: SkippedSummary,
 
     pub fn init(allocator: std.mem.Allocator) ScanResult {
         return .{
             .entries = .empty,
-            .ext_stats = std.StringHashMap(ExtansionStat).init(allocator),
+            .ext_stats = std.StringHashMap(ExtensionStat).init(allocator),
             .total_lines = 0,
             .total_bytes = 0,
             .total_files = 0,
             .total_dirs = 0,
+            .skipped = .{},
         };
     }
 
@@ -50,12 +60,10 @@ pub const ScanResult = struct {
             switch (entry) {
                 .file => |file| {
                     allocator.free(file.path);
-                    allocator.free(file.extansion);
+                    allocator.free(file.extension);
                     if (file.content) |content| allocator.free(content);
                 },
-                .dir => |dir| {
-                    allocator.free(dir.path);
-                },
+                .dir => |dir| allocator.free(dir.path),
             }
         }
 

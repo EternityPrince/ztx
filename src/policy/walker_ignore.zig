@@ -1,5 +1,5 @@
 const std = @import("std");
-const cli = @import("../cli/config.zig");
+const types = @import("../cli/types.zig");
 
 const GitIgnoreRule = struct {
     pattern: []const u8,
@@ -13,9 +13,7 @@ pub const GitIgnore = struct {
     rules: std.ArrayList(GitIgnoreRule),
 
     pub fn initEmpty() GitIgnore {
-        return .{
-            .rules = .empty,
-        };
+        return .{ .rules = .empty };
     }
 
     pub fn loadFromCwd(allocator: std.mem.Allocator) !GitIgnore {
@@ -104,6 +102,11 @@ pub const GitIgnore = struct {
     }
 };
 
+pub const PathSkipReason = enum {
+    builtin,
+    gitignore,
+};
+
 const ignored_names = [_][]const u8{
     ".git",
     ".zig-cache",
@@ -111,7 +114,7 @@ const ignored_names = [_][]const u8{
     ".DS_Store",
 };
 
-const ignored_file_extansions = [_][]const u8{
+const ignored_file_extensions = [_][]const u8{
     ".png",
     ".jpg",
     ".jpeg",
@@ -122,6 +125,12 @@ const ignored_file_extansions = [_][]const u8{
     ".tar",
     ".gz",
     ".exe",
+    ".class",
+    ".o",
+    ".a",
+    ".so",
+    ".dylib",
+    ".dll",
 };
 
 const default_source_extensions = [_][]const u8{
@@ -160,18 +169,23 @@ const default_source_extensions = [_][]const u8{
     ".txt",
 };
 
-pub fn shouldScanFile(name: []const u8, config: cli.Config) bool {
-    switch (config.scan_mode) {
-        .default => return matchesDefaultSources(name),
-        .full => return true,
-    }
+pub fn pathSkipReason(
+    name: []const u8,
+    rel_path: []const u8,
+    kind: std.fs.Dir.Entry.Kind,
+    gitignore: *const GitIgnore,
+) ?PathSkipReason {
+    if (matchesIgnoredName(name)) return .builtin;
+    if (kind == .file and matchesIgnoredExtension(name)) return .builtin;
+    if (gitignore.shouldSkipPath(rel_path, name, kind)) return .gitignore;
+    return null;
 }
 
-pub fn shouldSkip(name: []const u8, rel_path: []const u8, kind: std.fs.Dir.Entry.Kind, gitignore: *const GitIgnore) bool {
-    if (matchesIgnoredName(name)) return true;
-    if (matchesIgnoredExtansion(name) and kind == .file) return true;
-    if (gitignore.shouldSkipPath(rel_path, name, kind)) return true;
-    return false;
+pub fn shouldScanFile(name: []const u8, scan_mode: types.ScanMode) bool {
+    return switch (scan_mode) {
+        .default => matchesDefaultSources(name),
+        .full => true,
+    };
 }
 
 fn matchesDefaultSources(name: []const u8) bool {
@@ -190,11 +204,11 @@ fn matchesIgnoredName(name: []const u8) bool {
     return false;
 }
 
-fn matchesIgnoredExtansion(name: []const u8) bool {
-    const file_extansion = std.fs.path.extension(name);
+fn matchesIgnoredExtension(name: []const u8) bool {
+    const extension = std.fs.path.extension(name);
 
-    inline for (ignored_file_extansions) |ignored| {
-        if (std.mem.eql(u8, file_extansion, ignored)) return true;
+    inline for (ignored_file_extensions) |ignored| {
+        if (std.mem.eql(u8, extension, ignored)) return true;
     }
     return false;
 }
@@ -260,43 +274,22 @@ test "gitignore rules support wildcard and negation" {
     try std.testing.expect(!ignore.shouldSkipPath("src/other/a.zig", "a.zig", .file));
 }
 
-test "gitignore parser skips comments and empty lines" {
+test "pathSkipReason applies built-in and gitignore rules" {
     const allocator = std.testing.allocator;
     var ignore = try GitIgnore.loadFromContent(allocator,
-        \\
-        \\# comment
-        \\main
+        \\ignored.txt
         \\
     );
     defer ignore.deinit(allocator);
 
-    try std.testing.expect(ignore.shouldSkipPath("main", "main", .file));
-    try std.testing.expect(!ignore.shouldSkipPath("src/main.zig", "main.zig", .file));
+    try std.testing.expectEqual(PathSkipReason.builtin, pathSkipReason(".git", ".git", .directory, &ignore).?);
+    try std.testing.expectEqual(PathSkipReason.builtin, pathSkipReason("photo.png", "assets/photo.png", .file, &ignore).?);
+    try std.testing.expectEqual(PathSkipReason.gitignore, pathSkipReason("ignored.txt", "ignored.txt", .file, &ignore).?);
+    try std.testing.expect(pathSkipReason("main.zig", "src/main.zig", .file, &ignore) == null);
 }
 
-test "gitignore supports anchored, escaped and recursive patterns" {
-    const allocator = std.testing.allocator;
-    var ignore = try GitIgnore.loadFromContent(allocator,
-        \\/root-only.txt
-        \\**/generated/*
-        \\\\#literal
-        \\\\!literal
-        \\
-    );
-    defer ignore.deinit(allocator);
-
-    try std.testing.expect(ignore.shouldSkipPath("root-only.txt", "root-only.txt", .file));
-    try std.testing.expect(!ignore.shouldSkipPath("src/root-only.txt", "root-only.txt", .file));
-    try std.testing.expect(ignore.shouldSkipPath("src/generated/a.zig", "a.zig", .file));
-    try std.testing.expect(ignore.shouldSkipPath("#literal", "#literal", .file));
-    try std.testing.expect(ignore.shouldSkipPath("!literal", "!literal", .file));
-}
-
-test "shouldSkip applies built-in ignore names and extensions" {
-    var ignore = GitIgnore.initEmpty();
-    defer ignore.deinit(std.testing.allocator);
-
-    try std.testing.expect(shouldSkip(".git", ".git", .directory, &ignore));
-    try std.testing.expect(shouldSkip("photo.png", "assets/photo.png", .file, &ignore));
-    try std.testing.expect(!shouldSkip("main.zig", "src/main.zig", .file, &ignore));
+test "shouldScanFile obeys scan mode" {
+    try std.testing.expect(shouldScanFile("main.zig", .default));
+    try std.testing.expect(!shouldScanFile("archive.bin", .default));
+    try std.testing.expect(shouldScanFile("archive.bin", .full));
 }

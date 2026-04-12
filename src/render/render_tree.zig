@@ -122,7 +122,7 @@ test "tree uses unicode branches and sorted output" {
 
     try result.entries.append(allocator, .{ .file = .{
         .path = m_file,
-        .extansion = ext,
+        .extension = ext,
         .line_count = 0,
         .byte_size = 0,
         .depth_level = 0,
@@ -134,7 +134,7 @@ test "tree uses unicode branches and sorted output" {
     } });
     try result.entries.append(allocator, .{ .file = .{
         .path = z_file,
-        .extansion = try allocator.dupe(u8, ".txt"),
+        .extension = try allocator.dupe(u8, ".txt"),
         .line_count = 0,
         .byte_size = 0,
         .depth_level = 0,
@@ -146,7 +146,7 @@ test "tree uses unicode branches and sorted output" {
     } });
     try result.entries.append(allocator, .{ .file = .{
         .path = b_file,
-        .extansion = try allocator.dupe(u8, ".txt"),
+        .extension = try allocator.dupe(u8, ".txt"),
         .line_count = 0,
         .byte_size = 0,
         .depth_level = 0,

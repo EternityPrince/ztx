@@ -1,17 +1,17 @@
 const std = @import("std");
 const model = @import("../model.zig");
 
-pub fn updateExtansionStats(
+pub fn updateExtensionStats(
     allocator: std.mem.Allocator,
     result: *model.ScanResult,
-    ext_value: []const u8,
+    extension: []const u8,
     line_count: usize,
     byte_size: usize,
 ) !void {
-    const gop = try result.ext_stats.getOrPut(ext_value);
+    const gop = try result.ext_stats.getOrPut(extension);
 
     if (!gop.found_existing) {
-        const map_key = try allocator.dupe(u8, ext_value);
+        const map_key = try allocator.dupe(u8, extension);
         errdefer allocator.free(map_key);
 
         gop.key_ptr.* = map_key;
@@ -27,14 +27,14 @@ pub fn updateExtansionStats(
     }
 }
 
-test "updateExtansionStats accumulates counts lines and bytes" {
+test "updateExtensionStats accumulates count lines and bytes" {
     const allocator = std.testing.allocator;
     var result = model.ScanResult.init(allocator);
     defer result.deinit(allocator);
 
-    try updateExtansionStats(allocator, &result, ".zig", 10, 100);
-    try updateExtansionStats(allocator, &result, ".zig", 3, 25);
-    try updateExtansionStats(allocator, &result, ".txt", 1, 5);
+    try updateExtensionStats(allocator, &result, ".zig", 10, 100);
+    try updateExtensionStats(allocator, &result, ".zig", 3, 25);
+    try updateExtensionStats(allocator, &result, ".txt", 1, 5);
 
     const zig = result.ext_stats.get(".zig").?;
     const txt = result.ext_stats.get(".txt").?;

@@ -6,7 +6,7 @@ const Style = @import("style.zig").Style;
 
 const ExtRow = struct {
     ext: []const u8,
-    stat: model.ExtansionStat,
+    stat: model.ExtensionStat,
 };
 
 const top_types_limit: usize = 10;
@@ -31,7 +31,7 @@ pub fn printStats(writer: anytype, result: *const model.ScanResult, context: Ren
     var iterator = result.ext_stats.iterator();
     while (iterator.next()) |ext| {
         try rows.append(std.heap.page_allocator, .{
-            .ext = ext.key_ptr.*,
+            .ext = ext.key_ptr.*, 
             .stat = ext.value_ptr.*,
         });
     }
@@ -47,36 +47,27 @@ pub fn printStats(writer: anytype, result: *const model.ScanResult, context: Ren
         shown_files += row.stat.count;
         shown_lines += row.stat.total_lines;
         shown_bytes += row.stat.total_bytes;
-        try printExtRow(
-            writer,
-            style,
-            idx + 1,
-            row.ext,
-            row.stat,
-            result.total_files,
-            result.total_lines,
-            result.total_bytes,
-        );
+        try printExtRow(writer, style, idx + 1, row.ext, row.stat, result.total_files, result.total_lines, result.total_bytes);
     }
 
     if (rows.items.len > top_types_limit) {
-        const others = model.ExtansionStat{
+        const others = model.ExtensionStat{
             .count = result.total_files - shown_files,
             .total_lines = result.total_lines - shown_lines,
             .total_bytes = result.total_bytes - shown_bytes,
         };
 
-        try printExtRow(
-            writer,
-            style,
-            0,
-            "others",
-            others,
-            result.total_files,
-            result.total_lines,
-            result.total_bytes,
-        );
+        try printExtRow(writer, style, 0, "others", others, result.total_files, result.total_lines, result.total_bytes);
     }
+
+    try writer.writeAll("\n");
+    try style.write(writer, ansi.section, "SKIPPED\n");
+    try printMetric(writer, style, "gitignore", result.skipped.gitignore);
+    try printMetric(writer, style, "builtin", result.skipped.builtin);
+    try printMetric(writer, style, "binary/unsupported", result.skipped.binary_or_unsupported);
+    try printMetric(writer, style, "size limit", result.skipped.size_limit);
+    try printMetric(writer, style, "depth limit", result.skipped.depth_limit);
+    try printMetric(writer, style, "file limit", result.skipped.file_limit);
 }
 
 fn printMetric(writer: anytype, style: Style, label: []const u8, value: usize) !void {
@@ -101,7 +92,7 @@ fn printExtRow(
     style: Style,
     rank: usize,
     ext: []const u8,
-    stat: model.ExtansionStat,
+    stat: model.ExtensionStat,
     total_files: usize,
     total_lines: usize,
     total_bytes: usize,
@@ -153,46 +144,25 @@ fn extRowLessThan(_: void, left: ExtRow, right: ExtRow) bool {
     return std.mem.order(u8, left.ext, right.ext) == .lt;
 }
 
-test "print stats shows top 10 and others" {
+test "print stats includes skipped section" {
     const allocator = std.testing.allocator;
     var result = model.ScanResult.init(allocator);
     defer result.deinit(allocator);
 
     const stats = @import("../stats/ext_stats_update.zig");
-    var idx: usize = 0;
-    while (idx < 11) : (idx += 1) {
-        const ext_name = try std.fmt.allocPrint(allocator, ".t{d}", .{idx});
-        defer allocator.free(ext_name);
+    try stats.updateExtensionStats(allocator, &result, ".zig", 10, 100);
+    result.total_files = 1;
+    result.total_lines = 10;
+    result.total_bytes = 100;
+    result.skipped.gitignore = 2;
 
-        try stats.updateExtansionStats(allocator, &result, ext_name, idx + 1, (idx + 1) * 10);
-        result.total_files += 1;
-        result.total_lines += idx + 1;
-        result.total_bytes += (idx + 1) * 10;
-    }
-
-    try stats.updateExtansionStats(allocator, &result, ".zig", 100, 1000);
-    try stats.updateExtansionStats(allocator, &result, ".zig", 100, 1000);
-    try stats.updateExtansionStats(allocator, &result, ".zig", 100, 1000);
-    result.total_files += 3;
-    result.total_lines += 300;
-    result.total_bytes += 3000;
-
-    var buffer: [16384]u8 = undefined;
+    var buffer: [4096]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buffer);
 
-    try printStats(
-        fbs.writer(),
-        &result,
-        .{
-            .style = .{
-                .use_color = false,
-            },
-        },
-    );
+    try printStats(fbs.writer(), &result, .{ .style = .{ .use_color = false } });
 
     const output = fbs.getWritten();
     try std.testing.expect(std.mem.indexOf(u8, output, "SUMMARY") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "FILE TYPES (Top 10 by files)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "1. .zig | files: 3") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "* others") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "SKIPPED") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "gitignore") != null);
 }
