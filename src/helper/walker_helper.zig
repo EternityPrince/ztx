@@ -47,6 +47,26 @@ pub fn readFileData(allocator: std.mem.Allocator, file: *std.fs.File, capture_co
     return .{ .content = owned_content, .line_count = line_count };
 }
 
+pub fn isLikelyBinary(file: *std.fs.File) !bool {
+    try file.seekTo(0);
+
+    var sample: [2048]u8 = undefined;
+    const read_bytes = try file.read(sample[0..]);
+    try file.seekTo(0);
+
+    if (read_bytes == 0) return false;
+
+    var controls: usize = 0;
+    for (sample[0..read_bytes]) |byte| {
+        if (byte == 0) return true;
+
+        const is_printable = (byte >= 0x20 and byte <= 0x7e) or byte == '\n' or byte == '\r' or byte == '\t';
+        if (!is_printable) controls += 1;
+    }
+
+    return controls * 100 / read_bytes > 30;
+}
+
 test "joinRelativePath handles root and nested prefixes" {
     const allocator = std.testing.allocator;
 
@@ -94,4 +114,26 @@ test "readFileData can skip content capture" {
 
     try std.testing.expectEqual(@as(usize, 2), result.line_count);
     try std.testing.expect(result.content == null);
+}
+
+test "isLikelyBinary detects text and binary samples" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{
+        .sub_path = "text.txt",
+        .data = "line-1\nline-2\n",
+    });
+    try tmp.dir.writeFile(.{
+        .sub_path = "bin.bin",
+        .data = "\x00\xff\x01\x02DATA",
+    });
+
+    var text_file = try tmp.dir.openFile("text.txt", .{});
+    defer text_file.close();
+    try std.testing.expect(!(try isLikelyBinary(&text_file)));
+
+    var bin_file = try tmp.dir.openFile("bin.bin", .{});
+    defer bin_file.close();
+    try std.testing.expect(try isLikelyBinary(&bin_file));
 }

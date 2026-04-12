@@ -69,6 +69,18 @@ Generate a starter config:
 ztx init
 ```
 
+Preview without writing:
+
+```bash
+ztx init --dry-run
+```
+
+Overwrite existing file:
+
+```bash
+ztx init --force
+```
+
 Resolution order:
 
 1. CLI flags

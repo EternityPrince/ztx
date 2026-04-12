@@ -322,16 +322,22 @@ fn stripInlineComment(line: []const u8) []const u8 {
 }
 
 pub fn writeDefaultToCwd() !void {
-    var file = std.fs.cwd().createFile(".ztx.toml", .{ .exclusive = true }) catch |err| switch (err) {
-        error.PathAlreadyExists => {
-            std.debug.print(".ztx.toml already exists\n", .{});
-            return error.ConfigAlreadyExists;
-        },
-        else => return err,
-    };
-    defer file.close();
+    var cwd = std.fs.cwd();
+    _ = try writeDefaultToDir(&cwd, false);
+}
 
-    try file.writeAll(
+pub const WriteStatus = enum {
+    created,
+    overwritten,
+};
+
+pub fn writeDefaultToCwdWithForce(force: bool) !WriteStatus {
+    var cwd = std.fs.cwd();
+    return writeDefaultToDir(&cwd, force);
+}
+
+pub fn defaultTemplate() []const u8 {
+    return
         \\# ztx repository config
         \\
         \\[scan]
@@ -367,7 +373,24 @@ pub fn writeDefaultToCwd() !void {
         \\stats = true
         \\format = "text"
         \\
-    );
+    ;
+}
+
+fn writeDefaultToDir(dir: *std.fs.Dir, force: bool) !WriteStatus {
+    var file = if (force)
+        try dir.createFile(".ztx.toml", .{ .truncate = true })
+    else
+        dir.createFile(".ztx.toml", .{ .exclusive = true }) catch |err| switch (err) {
+            error.PathAlreadyExists => {
+                std.debug.print(".ztx.toml already exists\n", .{});
+                return error.ConfigAlreadyExists;
+            },
+            else => return err,
+        };
+    defer file.close();
+
+    try file.writeAll(defaultTemplate());
+    return if (force) .overwritten else .created;
 }
 
 test "parseToml reads scan output and profile sections" {
@@ -405,4 +428,24 @@ test "parseToml reads scan output and profile sections" {
     const custom = parsed.getProfile("custom").?;
     try std.testing.expectEqual(@as(?bool, true), custom.output.show_content);
     try std.testing.expectEqual(types.OutputFormat.markdown, custom.output.output_format.?);
+}
+
+test "writeDefaultToDir supports overwrite mode" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const first = try writeDefaultToDir(&tmp.dir, false);
+    try std.testing.expectEqual(WriteStatus.created, first);
+
+    try tmp.dir.writeFile(.{
+        .sub_path = ".ztx.toml",
+        .data = "legacy=true\n",
+    });
+
+    const second = try writeDefaultToDir(&tmp.dir, true);
+    try std.testing.expectEqual(WriteStatus.overwritten, second);
+
+    const rendered = try tmp.dir.readFileAlloc(std.testing.allocator, ".ztx.toml", 1_000_000);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings(defaultTemplate(), rendered);
 }

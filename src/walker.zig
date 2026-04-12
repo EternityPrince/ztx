@@ -81,14 +81,14 @@ fn walkDir(
 
         switch (entry.kind) {
             .directory => {
+                try addDirectoryEntry(allocator, result, known_dirs, rel_path, depth);
+
                 if (config.max_depth) |max_depth| {
-                    if (depth > max_depth) {
+                    if (depth >= max_depth) {
                         result.skipped.depth_limit += 1;
                         continue;
                     }
                 }
-
-                try addDirectoryEntry(allocator, result, known_dirs, rel_path, depth);
 
                 var child = try dir.openDir(entry.name, .{ .iterate = true });
                 defer child.close();
@@ -160,6 +160,13 @@ fn scanSingleFilePath(
     _ = gitignore;
     _ = known_dirs;
 
+    if (config.max_depth) |max_depth| {
+        if (depth > max_depth) {
+            result.skipped.depth_limit += 1;
+            return;
+        }
+    }
+
     const base_name = std.fs.path.basename(rel_path);
     if (!policy.shouldScanFile(base_name, config.scan_mode)) {
         result.skipped.binary_or_unsupported += 1;
@@ -188,6 +195,13 @@ fn scanFileFromDir(
     result: *model.ScanResult,
     config: *const cli.Config,
 ) !void {
+    if (config.max_depth) |max_depth| {
+        if (depth > max_depth) {
+            result.skipped.depth_limit += 1;
+            return;
+        }
+    }
+
     if (!policy.shouldScanFile(name, config.scan_mode)) {
         result.skipped.binary_or_unsupported += 1;
         return;
@@ -216,6 +230,11 @@ fn appendFile(
     config: *const cli.Config,
 ) !void {
     const stat = try file.stat();
+
+    if (try helper.isLikelyBinary(file)) {
+        result.skipped.binary_or_unsupported += 1;
+        return;
+    }
 
     if (config.max_bytes) |max_bytes| {
         if (result.total_bytes + stat.size > max_bytes) {
@@ -302,6 +321,10 @@ fn ensureParentDirs(
 }
 
 fn collectChangedPaths(allocator: std.mem.Allocator) !std.ArrayList([]const u8) {
+    return collectChangedPathsInCwd(allocator, null);
+}
+
+fn collectChangedPathsInCwd(allocator: std.mem.Allocator, cwd: ?[]const u8) !std.ArrayList([]const u8) {
     var set = std.StringHashMap(void).init(allocator);
     defer set.deinit();
 
@@ -311,8 +334,8 @@ fn collectChangedPaths(allocator: std.mem.Allocator) !std.ArrayList([]const u8) 
         list.deinit(allocator);
     }
 
-    try collectGitDiffPaths(allocator, &set, &list, &.{ "git", "diff", "--name-only" });
-    try collectGitDiffPaths(allocator, &set, &list, &.{ "git", "diff", "--name-only", "--cached" });
+    try collectGitDiffPaths(allocator, &set, &list, &.{ "git", "diff", "--name-only" }, cwd);
+    try collectGitDiffPaths(allocator, &set, &list, &.{ "git", "diff", "--name-only", "--cached" }, cwd);
 
     std.mem.sort([]const u8, list.items, {}, lessString);
     return list;
@@ -323,10 +346,12 @@ fn collectGitDiffPaths(
     set: *std.StringHashMap(void),
     list: *std.ArrayList([]const u8),
     argv: []const []const u8,
+    cwd: ?[]const u8,
 ) !void {
     const output = std.process.Child.run(.{
         .allocator = allocator,
         .argv = argv,
+        .cwd = cwd,
     }) catch |err| switch (err) {
         error.FileNotFound => return error.GitUnavailable,
         else => return err,
@@ -375,11 +400,16 @@ fn pathDepth(path: []const u8) usize {
 fn pathInScope(path: []const u8, scopes: []const []const u8) bool {
     for (scopes) |scope| {
         if (std.mem.eql(u8, scope, ".")) return true;
-        if (std.mem.eql(u8, path, scope)) return true;
+        const trimmed_scope = std.mem.trimRight(u8, scope, "/");
+        if (trimmed_scope.len == 0) return true;
 
-        var joined: [512]u8 = undefined;
-        const prefix = std.fmt.bufPrint(&joined, "{s}/", .{scope}) catch continue;
-        if (std.mem.startsWith(u8, path, prefix)) return true;
+        if (std.mem.eql(u8, path, trimmed_scope)) return true;
+        if (path.len > trimmed_scope.len and
+            std.mem.startsWith(u8, path, trimmed_scope) and
+            path[trimmed_scope.len] == '/')
+        {
+            return true;
+        }
     }
 
     return false;
@@ -398,14 +428,19 @@ test "pathInScope supports dot and nested scopes" {
     try std.testing.expect(!pathInScope("pkg/file.zig", &.{ "src" }));
 }
 
-test "scan respects max-files limit" {
+test "pathInScope handles long scopes without fixed buffers" {
     const allocator = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{ .iterate = true });
-    defer tmp.cleanup();
+    const long_scope = try allocator.alloc(u8, 600);
+    defer allocator.free(long_scope);
+    @memset(long_scope, 'a');
 
-    try tmp.dir.writeFile(.{ .sub_path = "a.zig", .data = "const a = 1;\n" });
-    try tmp.dir.writeFile(.{ .sub_path = "b.zig", .data = "const b = 2;\n" });
+    const path = try std.fmt.allocPrint(allocator, "{s}/file.zig", .{long_scope});
+    defer allocator.free(path);
 
+    try std.testing.expect(pathInScope(path, &.{long_scope}));
+}
+
+fn makeTestConfig(allocator: std.mem.Allocator) !cli.Config {
     var config = cli.Config{
         .show_content = false,
         .show_tree = true,
@@ -416,18 +451,23 @@ test "scan respects max-files limit" {
         .output_format = .text,
         .paths = std.ArrayList([]const u8).empty,
         .max_depth = null,
-        .max_files = 1,
+        .max_files = null,
         .max_bytes = null,
         .max_content_bytes = 1024 * 1024,
         .changed_only = false,
         .profile_name = null,
     };
-    defer config.deinit(allocator);
-
     try config.paths.append(allocator, try allocator.dupe(u8, "."));
+    return config;
+}
 
+fn runWalkForTest(
+    allocator: std.mem.Allocator,
+    dir: *std.fs.Dir,
+    config: *const cli.Config,
+) !model.ScanResult {
     var result = model.ScanResult.init(allocator);
-    defer result.deinit(allocator);
+    errdefer result.deinit(allocator);
 
     var ignore = policy.GitIgnore.initEmpty();
     defer ignore.deinit(allocator);
@@ -435,8 +475,127 @@ test "scan respects max-files limit" {
     var known_dirs = std.StringHashMap(void).init(allocator);
     defer known_dirs.deinit();
 
-    try walkDir(allocator, &tmp.dir, "", 0, &result, &config, &ignore, &known_dirs);
+    try walkDir(allocator, dir, "", 0, &result, config, &ignore, &known_dirs);
+    return result;
+}
+
+test "scan respects max-files limit" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{ .sub_path = "a.zig", .data = "const a = 1;\n" });
+    try tmp.dir.writeFile(.{ .sub_path = "b.zig", .data = "const b = 2;\n" });
+
+    var config = try makeTestConfig(allocator);
+    defer config.deinit(allocator);
+    config.max_files = 1;
+
+    var result = try runWalkForTest(allocator, &tmp.dir, &config);
+    defer result.deinit(allocator);
 
     try std.testing.expectEqual(@as(usize, 1), result.total_files);
     try std.testing.expectEqual(@as(usize, 1), result.skipped.file_limit);
+}
+
+test "scan empty directory returns empty result" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    var config = try makeTestConfig(allocator);
+    defer config.deinit(allocator);
+
+    var result = try runWalkForTest(allocator, &tmp.dir, &config);
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), result.total_files);
+    try std.testing.expectEqual(@as(usize, 0), result.total_dirs);
+}
+
+test "scan skips oversized content but keeps stats" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    const file_size = (1024 * 1024) + 10;
+    const buffer = try allocator.alloc(u8, file_size);
+    defer allocator.free(buffer);
+    @memset(buffer, 'a');
+    buffer[file_size - 1] = '\n';
+
+    try tmp.dir.writeFile(.{
+        .sub_path = "big.txt",
+        .data = buffer,
+    });
+
+    var config = try makeTestConfig(allocator);
+    defer config.deinit(allocator);
+    config.show_content = true;
+    config.max_content_bytes = 1024 * 1024;
+
+    var result = try runWalkForTest(allocator, &tmp.dir, &config);
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), result.total_files);
+    try std.testing.expectEqual(@as(usize, file_size), result.total_bytes);
+    try std.testing.expectEqual(@as(usize, 1), result.skipped.size_limit);
+
+    switch (result.entries.items[0]) {
+        .file => |file| try std.testing.expect(file.content == null),
+        .dir => return error.TestUnexpectedResult,
+    }
+}
+
+test "scan full mode skips binary files by content" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{ .sub_path = "code.zig", .data = "const x = 1;\n" });
+    try tmp.dir.writeFile(.{ .sub_path = "blob.bin", .data = "\x00\xff\x01\x02" });
+
+    var config = try makeTestConfig(allocator);
+    defer config.deinit(allocator);
+    config.scan_mode = .full;
+
+    var result = try runWalkForTest(allocator, &tmp.dir, &config);
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), result.total_files);
+    try std.testing.expectEqual(@as(usize, 1), result.skipped.binary_or_unsupported);
+}
+
+test "scan counts depth and byte limits" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    try tmp.dir.makePath("sub/deep");
+    try tmp.dir.writeFile(.{ .sub_path = "root.zig", .data = "const a = 1;\n" });
+    try tmp.dir.writeFile(.{ .sub_path = "sub/inner.zig", .data = "const b = 2;\n" });
+    try tmp.dir.writeFile(.{ .sub_path = "sub/deep/more.zig", .data = "const c = 3;\n" });
+
+    var config = try makeTestConfig(allocator);
+    defer config.deinit(allocator);
+    config.max_depth = 1;
+    config.max_bytes = 20;
+
+    var result = try runWalkForTest(allocator, &tmp.dir, &config);
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), result.total_files);
+    try std.testing.expect(result.skipped.depth_limit > 0);
+    try std.testing.expect(result.skipped.size_limit > 0);
+}
+
+test "changed scan reports git unavailable outside repository" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const cwd = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer allocator.free(cwd);
+
+    try std.testing.expectError(error.GitUnavailable, collectChangedPathsInCwd(allocator, cwd));
 }

@@ -65,8 +65,12 @@ pub const Config = struct {
     }
 };
 
-pub fn initConfigFile() !void {
-    try config_file.writeDefaultToCwd();
+pub fn initConfigFile(force: bool) !config_file.WriteStatus {
+    return config_file.writeDefaultToCwdWithForce(force);
+}
+
+pub fn initConfigTemplate() []const u8 {
+    return config_file.defaultTemplate();
 }
 
 fn defaultConfig(allocator: std.mem.Allocator) !Config {

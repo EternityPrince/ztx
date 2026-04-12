@@ -110,8 +110,6 @@ fn printMarkdown(writer: anytype, allocator: std.mem.Allocator, result: *const m
 }
 
 fn printJson(writer: anytype, allocator: std.mem.Allocator, result: *const model.ScanResult, config: *const cli.Config) !void {
-    _ = allocator;
-
     try writer.writeAll("{");
 
     try writer.writeAll("\"summary\":{");
@@ -123,8 +121,8 @@ fn printJson(writer: anytype, allocator: std.mem.Allocator, result: *const model
     });
     try writer.writeAll("},");
 
-    var rows = try collectSortedExtRows(std.heap.page_allocator, result);
-    defer rows.deinit(std.heap.page_allocator);
+    var rows = try collectSortedExtRows(allocator, result);
+    defer rows.deinit(allocator);
 
     try writer.writeAll("\"types\":[");
     for (rows.items, 0..) |row, idx| {
@@ -340,4 +338,175 @@ test "json format emits stable top-level keys" {
     try std.testing.expect(std.mem.indexOf(u8, output, "\"tree\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "\"files\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "\"skipped\"") != null);
+}
+
+test "text default snapshot is stable" {
+    const allocator = std.testing.allocator;
+    var result = try makeTestResult(allocator);
+    defer result.deinit(allocator);
+
+    var config = cli.Config{
+        .show_content = true,
+        .show_tree = true,
+        .show_stats = true,
+        .use_color = false,
+        .color_mode = .never,
+        .scan_mode = .default,
+        .output_format = .text,
+        .paths = std.ArrayList([]const u8).empty,
+        .max_depth = null,
+        .max_files = null,
+        .max_bytes = null,
+        .max_content_bytes = 1024 * 1024,
+        .changed_only = false,
+        .profile_name = null,
+    };
+    defer config.deinit(allocator);
+    try config.paths.append(allocator, try allocator.dupe(u8, "."));
+
+    var buffer: [16384]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buffer);
+    try printStdout(fbs.writer(), allocator, &result, &config);
+
+    const expected =
+        \\SUMMARY
+        \\  Files: 1
+        \\  Dirs: 1
+        \\  Lines: 1
+        \\  Bytes: 13
+        \\  Avg lines/file: 1.0
+        \\  Avg bytes/file: 13.0
+        \\
+        \\FILE TYPES (Top 10 by files)
+        \\  1. .zig | files: 1 | lines: 1 | bytes: 13 | share: 100.0% / 100.0% / 100.0%
+        \\
+        \\SKIPPED
+        \\  gitignore: 0
+        \\  builtin: 0
+        \\  binary/unsupported: 0
+        \\  size limit: 0
+        \\  depth limit: 0
+        \\  file limit: 0
+        \\
+        \\DIRECTORY TREE
+        \\└── src/
+        \\    └── main.zig
+        \\
+        \\FILES
+        \\===== src/main.zig =====
+        \\1 │ const x = 1;
+        \\
+        \\
+    ;
+
+    try std.testing.expectEqualStrings(expected, fbs.getWritten());
+}
+
+test "markdown llm snapshot is stable" {
+    const allocator = std.testing.allocator;
+    var result = try makeTestResult(allocator);
+    defer result.deinit(allocator);
+
+    var config = cli.Config{
+        .show_content = true,
+        .show_tree = true,
+        .show_stats = true,
+        .use_color = false,
+        .color_mode = .never,
+        .scan_mode = .default,
+        .output_format = .markdown,
+        .paths = std.ArrayList([]const u8).empty,
+        .max_depth = null,
+        .max_files = null,
+        .max_bytes = null,
+        .max_content_bytes = 1024 * 1024,
+        .changed_only = false,
+        .profile_name = null,
+    };
+    defer config.deinit(allocator);
+    try config.paths.append(allocator, try allocator.dupe(u8, "."));
+
+    var buffer: [16384]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buffer);
+    try printStdout(fbs.writer(), allocator, &result, &config);
+
+    const output = fbs.getWritten();
+    try std.testing.expect(std.mem.startsWith(u8, output, "# ztx report\n"));
+    try std.testing.expect(std.mem.indexOf(u8, output, "## Summary") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "## Directory Tree") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "## Files") != null);
+}
+
+test "text stats snapshot is stable" {
+    const allocator = std.testing.allocator;
+    var result = try makeTestResult(allocator);
+    defer result.deinit(allocator);
+
+    var config = cli.Config{
+        .show_content = false,
+        .show_tree = false,
+        .show_stats = true,
+        .use_color = false,
+        .color_mode = .never,
+        .scan_mode = .default,
+        .output_format = .text,
+        .paths = std.ArrayList([]const u8).empty,
+        .max_depth = null,
+        .max_files = null,
+        .max_bytes = null,
+        .max_content_bytes = 1024 * 1024,
+        .changed_only = false,
+        .profile_name = null,
+    };
+    defer config.deinit(allocator);
+    try config.paths.append(allocator, try allocator.dupe(u8, "."));
+
+    var buffer: [8192]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buffer);
+    try printStdout(fbs.writer(), allocator, &result, &config);
+
+    const output = fbs.getWritten();
+    try std.testing.expect(std.mem.indexOf(u8, output, "SUMMARY") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "FILE TYPES") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "DIRECTORY TREE") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "FILES") == null);
+}
+
+test "json snapshot is parseable and stable for top-level schema" {
+    const allocator = std.testing.allocator;
+    var result = try makeTestResult(allocator);
+    defer result.deinit(allocator);
+
+    var config = cli.Config{
+        .show_content = true,
+        .show_tree = true,
+        .show_stats = true,
+        .use_color = false,
+        .color_mode = .never,
+        .scan_mode = .default,
+        .output_format = .json,
+        .paths = std.ArrayList([]const u8).empty,
+        .max_depth = null,
+        .max_files = null,
+        .max_bytes = null,
+        .max_content_bytes = 1024 * 1024,
+        .changed_only = false,
+        .profile_name = null,
+    };
+    defer config.deinit(allocator);
+    try config.paths.append(allocator, try allocator.dupe(u8, "."));
+
+    var buffer: [16384]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buffer);
+    try printStdout(fbs.writer(), allocator, &result, &config);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, fbs.getWritten(), .{});
+    defer parsed.deinit();
+
+    const object = parsed.value.object;
+    try std.testing.expect(object.get("summary") != null);
+    try std.testing.expect(object.get("types") != null);
+    try std.testing.expect(object.get("tree") != null);
+    try std.testing.expect(object.get("files") != null);
+    try std.testing.expect(object.get("skipped") != null);
 }

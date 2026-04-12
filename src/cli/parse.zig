@@ -22,9 +22,14 @@ pub const RunOptions = struct {
     }
 };
 
+pub const InitOptions = struct {
+    force: bool = false,
+    dry_run: bool = false,
+};
+
 pub const Command = union(enum) {
     run: RunOptions,
-    init,
+    init: InitOptions,
     help,
 };
 
@@ -57,12 +62,7 @@ fn parseArgsFrom(allocator: std.mem.Allocator, args: []const []const u8) !Parsed
     const first = args[1];
     if (!isFlag(first)) {
         if (std.mem.eql(u8, first, "init")) {
-            if (args.len > 2) {
-                std.debug.print("unknown flag for init command: {s}\n", .{args[2]});
-                try printHelp();
-                return error.UnknownFlag;
-            }
-            return .{ .command = .init };
+            return .{ .command = .{ .init = try parseInitArgs(args[2..]) } };
         }
 
         if (std.mem.eql(u8, first, "help")) {
@@ -255,7 +255,7 @@ pub fn printHelp() !void {
     try stdout.writeAll(
         \\Usage:
         \\  ztx [flags]
-        \\  ztx init
+        \\  ztx init [--force] [--dry-run]
         \\
         \\Core flags (compatible):
         \\  -no-tree, -no-content, -no-stats, -no-color, -full
@@ -274,6 +274,8 @@ pub fn printHelp() !void {
         \\  --max-bytes <n>
         \\  --changed (scan only changed tracked/staged files)
         \\  --all (disable changed-only mode)
+        \\  --force (for `init`: overwrite existing .ztx.toml)
+        \\  --dry-run (for `init`: print config to stdout)
         \\  -h, --help
         \\
         \\Examples:
@@ -282,7 +284,8 @@ pub fn printHelp() !void {
         \\  ztx --scan-mode full --path src --path build.zig
         \\  ztx --format markdown --profile llm
         \\  ztx --changed --format json
-        \\  ztx init
+        \\  ztx init --dry-run
+        \\  ztx init --force
         \\
     );
 
@@ -342,7 +345,46 @@ test "parse init command" {
     defer parsed.deinit(allocator);
 
     switch (parsed.command) {
-        .init => {},
+        .init => |init| {
+            try std.testing.expect(!init.force);
+            try std.testing.expect(!init.dry_run);
+        },
         else => return error.TestUnexpectedResult,
     }
+}
+
+test "parse init command supports force and dry-run flags" {
+    const allocator = std.testing.allocator;
+    var parsed = try parseArgsFrom(allocator, &.{ "ztx", "init", "--force", "--dry-run" });
+    defer parsed.deinit(allocator);
+
+    switch (parsed.command) {
+        .init => |init| {
+            try std.testing.expect(init.force);
+            try std.testing.expect(init.dry_run);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+fn parseInitArgs(args: []const []const u8) !InitOptions {
+    var options = InitOptions{};
+
+    for (args) |arg| {
+        if (std.mem.eql(u8, arg, "--force")) {
+            options.force = true;
+            continue;
+        }
+
+        if (std.mem.eql(u8, arg, "--dry-run")) {
+            options.dry_run = true;
+            continue;
+        }
+
+        std.debug.print("unknown flag for init command: {s}\n", .{arg});
+        try printHelp();
+        return error.UnknownFlag;
+    }
+
+    return options;
 }

@@ -21,9 +21,22 @@ pub fn main() !void {
             try cli.printHelp();
             return;
         },
-        .init => {
-            try cli_config.initConfigFile();
-            std.debug.print("Created .ztx.toml\n", .{});
+        .init => |init| {
+            if (init.dry_run) {
+                var stdout_buffer: [4096]u8 = undefined;
+                var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
+                var stdout = &stdout_writer.interface;
+
+                try stdout.writeAll(cli_config.initConfigTemplate());
+                try stdout.flush();
+                return;
+            }
+
+            const status = try cli_config.initConfigFile(init.force);
+            switch (status) {
+                .created => std.debug.print("Created .ztx.toml\n", .{}),
+                .overwritten => std.debug.print("Overwrote .ztx.toml\n", .{}),
+            }
             return;
         },
         .run => |run| {
