@@ -58,3 +58,35 @@ pub const Config = struct {
         return std.fs.File.stdout().isTty();
     }
 };
+
+test "fromOptions applies help normalization and no-color override" {
+    const options = parse.Options{
+        .show_tree = true,
+        .show_content = true,
+        .show_stats = true,
+        .no_color = true,
+        .show_help = true,
+        .scan_mode = .default,
+    };
+
+    const config = try Config.fromOptions(options);
+
+    try std.testing.expect(config.show_help);
+    try std.testing.expect(!config.show_tree);
+    try std.testing.expect(!config.show_content);
+    try std.testing.expect(!config.show_stats);
+    try std.testing.expect(!config.use_color);
+}
+
+test "validate fails for fully disabled output" {
+    const config = Config{
+        .show_content = false,
+        .show_tree = false,
+        .show_help = false,
+        .show_stats = false,
+        .use_color = false,
+        .scan_mode = .default,
+    };
+
+    try std.testing.expectError(error.EmptyOutput, config.validate());
+}

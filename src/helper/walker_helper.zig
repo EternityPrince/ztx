@@ -46,3 +46,52 @@ pub fn readFileData(allocator: std.mem.Allocator, file: *std.fs.File, capture_co
 
     return .{ .content = owned_content, .line_count = line_count };
 }
+
+test "joinRelativePath handles root and nested prefixes" {
+    const allocator = std.testing.allocator;
+
+    const root_joined = try joinRelativePath(allocator, "", "main.zig");
+    defer allocator.free(root_joined);
+    try std.testing.expectEqualStrings("main.zig", root_joined);
+
+    const nested_joined = try joinRelativePath(allocator, "src/render", "render.zig");
+    defer allocator.free(nested_joined);
+    try std.testing.expectEqualStrings("src/render/render.zig", nested_joined);
+}
+
+test "readFileData counts lines and returns content" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{
+        .sub_path = "sample.txt",
+        .data = "a\nb",
+    });
+
+    var file = try tmp.dir.openFile("sample.txt", .{});
+    defer file.close();
+
+    const result = try readFileData(std.testing.allocator, &file, true);
+    defer if (result.content) |content| std.testing.allocator.free(content);
+
+    try std.testing.expectEqual(@as(usize, 2), result.line_count);
+    try std.testing.expectEqualStrings("a\nb", result.content.?);
+}
+
+test "readFileData can skip content capture" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{
+        .sub_path = "sample.txt",
+        .data = "line-1\nline-2\n",
+    });
+
+    var file = try tmp.dir.openFile("sample.txt", .{});
+    defer file.close();
+
+    const result = try readFileData(std.testing.allocator, &file, false);
+
+    try std.testing.expectEqual(@as(usize, 2), result.line_count);
+    try std.testing.expect(result.content == null);
+}

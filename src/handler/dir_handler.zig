@@ -2,6 +2,7 @@ const std = @import("std");
 const model = @import("../model.zig");
 const helper = @import("../helper/walker_helper.zig");
 const walker = @import("../walker.zig");
+const policy = @import("../policy/walker_ignore.zig");
 const cli = @import("../cli/config.zig");
 
 pub fn handleDirectory(
@@ -12,6 +13,7 @@ pub fn handleDirectory(
     depht: usize,
     result: *model.ScanResult,
     config: cli.Config,
+    gitignore: *const policy.GitIgnore,
 ) !void {
     const rel_path = try helper.joinRelativePath(allocator, prefix, name);
     defer allocator.free(rel_path);
@@ -31,5 +33,5 @@ pub fn handleDirectory(
     var child = try dir.openDir(name, .{ .iterate = true });
     defer child.close();
 
-    try walker.walkDir(allocator, &child, rel_path, depht + 1, result, config);
+    try walker.walkDir(allocator, &child, rel_path, depht + 1, result, config, gitignore);
 }

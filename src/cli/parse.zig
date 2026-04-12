@@ -80,3 +80,12 @@ pub fn printHelp() !void {
 test "parseRawArg supports -no-color" {
     try std.testing.expectEqual(Arg.no_color, try parseRawArg("-no-color"));
 }
+
+test "parseRawArg supports help aliases" {
+    try std.testing.expectEqual(Arg.help, try parseRawArg("-h"));
+    try std.testing.expectEqual(Arg.help, try parseRawArg("--help"));
+}
+
+test "parseRawArg rejects unknown flags" {
+    try std.testing.expectError(error.UnknownFlag, parseRawArg("--unknown"));
+}

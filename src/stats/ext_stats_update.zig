@@ -26,3 +26,24 @@ pub fn updateExtansionStats(
         gop.value_ptr.*.count += 1;
     }
 }
+
+test "updateExtansionStats accumulates counts lines and bytes" {
+    const allocator = std.testing.allocator;
+    var result = model.ScanResult.init(allocator);
+    defer result.deinit(allocator);
+
+    try updateExtansionStats(allocator, &result, ".zig", 10, 100);
+    try updateExtansionStats(allocator, &result, ".zig", 3, 25);
+    try updateExtansionStats(allocator, &result, ".txt", 1, 5);
+
+    const zig = result.ext_stats.get(".zig").?;
+    const txt = result.ext_stats.get(".txt").?;
+
+    try std.testing.expectEqual(@as(usize, 2), zig.count);
+    try std.testing.expectEqual(@as(usize, 13), zig.total_lines);
+    try std.testing.expectEqual(@as(usize, 125), zig.total_bytes);
+
+    try std.testing.expectEqual(@as(usize, 1), txt.count);
+    try std.testing.expectEqual(@as(usize, 1), txt.total_lines);
+    try std.testing.expectEqual(@as(usize, 5), txt.total_bytes);
+}
