@@ -23,6 +23,13 @@ pub const TreeNode = struct {
     byte_size: usize,
 };
 
+const BadgeWidths = struct {
+    files: usize,
+    lines: usize,
+    comments: usize,
+    bytes: usize,
+};
+
 pub fn printTree(
     writer: anytype,
     allocator: std.mem.Allocator,
@@ -38,11 +45,12 @@ pub fn printTree(
     defer nodes.deinit(allocator);
 
     const badge_column = computeBadgeColumn(nodes.items);
+    const badge_widths = try computeBadgeWidths(nodes.items);
 
     var continuation = std.ArrayList(bool).empty;
     defer continuation.deinit(allocator);
 
-    try printChildren(writer, style, nodes.items, "", tree_sort_mode, badge_column, &continuation, allocator);
+    try printChildren(writer, style, nodes.items, "", tree_sort_mode, badge_column, badge_widths, &continuation, allocator);
 }
 
 pub fn buildTreeNodes(allocator: std.mem.Allocator, result: *const model.ScanResult) !std.ArrayList(TreeNode) {
@@ -117,6 +125,7 @@ fn printChildren(
     parent: []const u8,
     tree_sort_mode: types.TreeSortMode,
     badge_column: usize,
+    badge_widths: BadgeWidths,
     continuation: *std.ArrayList(bool),
     allocator: std.mem.Allocator,
 ) !void {
@@ -153,18 +162,18 @@ fn printChildren(
                 try style.print(writer, ansi.dir, "{s}/", .{node.name});
                 const label_width = continuation.items.len * 4 + 4 + node.name.len + 1;
                 try writeBadgePadding(writer, label_width, badge_column);
-                try printDirBadge(writer, style, node);
+                try printDirBadge(writer, style, node, badge_widths);
                 try writer.writeAll("\n");
 
                 try continuation.append(allocator, !is_last);
                 defer _ = continuation.pop();
-                try printChildren(writer, style, nodes, node.path, tree_sort_mode, badge_column, continuation, allocator);
+                try printChildren(writer, style, nodes, node.path, tree_sort_mode, badge_column, badge_widths, continuation, allocator);
             },
             .file => {
                 try style.print(writer, ansi.file, "{s}", .{node.name});
                 const label_width = continuation.items.len * 4 + 4 + node.name.len;
                 try writeBadgePadding(writer, label_width, badge_column);
-                try printFileBadge(writer, style, node);
+                try printFileBadge(writer, style, node, badge_widths);
                 try writer.writeAll("\n");
             },
         }
@@ -189,25 +198,94 @@ fn computeBadgeColumn(nodes: []const TreeNode) usize {
     return max_label_width + 2;
 }
 
-fn printDirBadge(writer: anytype, style: Style, node: TreeNode) !void {
-    var byte_buf: [32]u8 = undefined;
-    const human = try formatByteSize(&byte_buf, node.byte_size);
-    try style.print(writer, ansi.label, "  [F:{d} L:{d} C:{d} B:{s}]", .{
-        node.file_count,
-        node.line_count,
-        node.comment_line_count,
-        human,
-    });
+fn computeBadgeWidths(nodes: []const TreeNode) !BadgeWidths {
+    var widths = BadgeWidths{
+        .files = 1,
+        .lines = 1,
+        .comments = 1,
+        .bytes = 1,
+    };
+
+    for (nodes) |node| {
+        var files_buf: [32]u8 = undefined;
+        var lines_buf: [32]u8 = undefined;
+        var comments_buf: [32]u8 = undefined;
+        var bytes_buf: [32]u8 = undefined;
+
+        if (node.kind == .dir) {
+            const files = try formatGroupedUsize(&files_buf, node.file_count);
+            widths.files = @max(widths.files, files.len);
+        }
+
+        const lines = try formatGroupedUsize(&lines_buf, node.line_count);
+        widths.lines = @max(widths.lines, lines.len);
+
+        const comments = try formatGroupedUsize(&comments_buf, node.comment_line_count);
+        widths.comments = @max(widths.comments, comments.len);
+
+        const bytes = try formatByteSize(&bytes_buf, node.byte_size);
+        widths.bytes = @max(widths.bytes, bytes.len);
+    }
+
+    return widths;
 }
 
-fn printFileBadge(writer: anytype, style: Style, node: TreeNode) !void {
+fn printDirBadge(writer: anytype, style: Style, node: TreeNode, widths: BadgeWidths) !void {
     var byte_buf: [32]u8 = undefined;
+    var files_buf: [32]u8 = undefined;
+    var lines_buf: [32]u8 = undefined;
+    var comments_buf: [32]u8 = undefined;
     const human = try formatByteSize(&byte_buf, node.byte_size);
-    try style.print(writer, ansi.label, "  [L:{d} C:{d} B:{s}]", .{
-        node.line_count,
-        node.comment_line_count,
-        human,
-    });
+    const files = try formatGroupedUsize(&files_buf, node.file_count);
+    const lines = try formatGroupedUsize(&lines_buf, node.line_count);
+    const comments = try formatGroupedUsize(&comments_buf, node.comment_line_count);
+    try style.start(writer, ansi.label);
+    defer style.reset(writer) catch {};
+
+    try writer.writeAll("· f=");
+    try writeLeftPadding(writer, widths.files, files.len);
+    try writer.writeAll(files);
+    try writer.writeAll(" | l=");
+    try writeLeftPadding(writer, widths.lines, lines.len);
+    try writer.writeAll(lines);
+    try writer.writeAll(" | c=");
+    try writeLeftPadding(writer, widths.comments, comments.len);
+    try writer.writeAll(comments);
+    try writer.writeAll(" | b=");
+    try writeLeftPadding(writer, widths.bytes, human.len);
+    try writer.writeAll(human);
+}
+
+fn printFileBadge(writer: anytype, style: Style, node: TreeNode, widths: BadgeWidths) !void {
+    var byte_buf: [32]u8 = undefined;
+    var lines_buf: [32]u8 = undefined;
+    var comments_buf: [32]u8 = undefined;
+    const human = try formatByteSize(&byte_buf, node.byte_size);
+    const lines = try formatGroupedUsize(&lines_buf, node.line_count);
+    const comments = try formatGroupedUsize(&comments_buf, node.comment_line_count);
+    try style.start(writer, ansi.label);
+    defer style.reset(writer) catch {};
+
+    try writer.writeAll("· ");
+    // Keep l/c/b columns aligned with directory badges without showing a fake file-count field.
+    try writeLeftPadding(writer, widths.files + 5, 0); // width of "f=<n> | "
+    try writer.writeAll("l=");
+    try writeLeftPadding(writer, widths.lines, lines.len);
+    try writer.writeAll(lines);
+    try writer.writeAll(" | c=");
+    try writeLeftPadding(writer, widths.comments, comments.len);
+    try writer.writeAll(comments);
+    try writer.writeAll(" | b=");
+    try writeLeftPadding(writer, widths.bytes, human.len);
+    try writer.writeAll(human);
+}
+
+fn writeLeftPadding(writer: anytype, width: usize, value_len: usize) !void {
+    if (width <= value_len) return;
+    var i: usize = 0;
+    while (i < width - value_len) : (i += 1) {
+        try writer.writeAll(" ");
+    }
 }
 
 fn formatByteSize(buffer: *[32]u8, bytes: usize) ![]const u8 {
@@ -225,6 +303,28 @@ fn formatByteSize(buffer: *[32]u8, bytes: usize) ![]const u8 {
     }
 
     return std.fmt.bufPrint(buffer, "{d:.1}{s}", .{ value, units[unit_index] });
+}
+
+fn formatGroupedUsize(buffer: *[32]u8, value: usize) ![]const u8 {
+    var raw_buf: [32]u8 = undefined;
+    const raw = try std.fmt.bufPrint(&raw_buf, "{d}", .{value});
+
+    var out_index = buffer.len;
+    var digit_count: usize = 0;
+    var i = raw.len;
+    while (i > 0) {
+        i -= 1;
+        out_index -= 1;
+        buffer[out_index] = raw[i];
+        digit_count += 1;
+
+        if (i > 0 and digit_count % 3 == 0) {
+            out_index -= 1;
+            buffer[out_index] = '_';
+        }
+    }
+
+    return buffer[out_index..];
 }
 
 fn parentPath(path: []const u8) []const u8 {
@@ -333,11 +433,19 @@ test "tree uses unicode branches and prints badges" {
 
     const output = fbs.getWritten();
     try std.testing.expect(std.mem.indexOf(u8, output, "DIRECTORY TREE") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "├── a/  [F:2 L:6 C:3 B:158B]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "│   ├── b/  [F:1 L:4 C:2 B:128B]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "│   │   └── f.txt  [L:4 C:2 B:128B]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "│   └── z.txt  [L:2 C:1 B:30B]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "└── m.txt  [L:7 C:1 B:1.0KiB]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "├── a/") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "· f=2 | l=6 | c=3 | b=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "158B") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "│   ├── b/") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "· f=1 | l=4 | c=2 | b=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "128B") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "│   │   └── f.txt") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "l=4 | c=2 | b=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "│   └── z.txt") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "l=2 | c=1 | b=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "30B") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "└── m.txt") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "l=7 | c=1 | b=1.0KiB") != null);
 }
 
 test "tree supports sorting by lines" {

@@ -498,7 +498,7 @@ pub fn defaultTemplate() []const u8 {
     \\
     \\[output]
     \\tree = true
-    \\content = true
+    \\content = false
     \\stats = true
     \\format = "text"
     \\color = "auto"
@@ -521,6 +521,13 @@ pub fn defaultTemplate() []const u8 {
     \\content = true
     \\stats = true
     \\format = "markdown"
+    \\
+    \\[profiles.llm-token]
+    \\tree = true
+    \\content = false
+    \\stats = true
+    \\format = "markdown"
+    \\tree_sort = "lines"
     \\
     \\[profiles.stats]
     \\tree = false

@@ -1,7 +1,7 @@
 # ztx
 
 `ztx` is a fast repository scanner for codebase context.
-It gives predictable snapshots of structure, stats, and file content for common workflows (`review`, `llm`, `stats`) in one command.
+It gives predictable snapshots of structure and stats by default, with optional file content and dedicated workflows (`review`, `llm`, `llm-token`, `stats`).
 
 ## Why ztx
 
@@ -39,16 +39,23 @@ ztx --stats --no-content --no-tree
 # 3) Full scan over selected paths
 ztx --scan-mode full --path src --path build.zig
 
-# 4) LLM-focused markdown profile
+# 4) Token-optimized LLM output (shortcut)
+ztx ai
+
+# 5) Same as above, but explicit via profile
+ztx --profile llm-token --format markdown
+
+# 6) Full-context LLM markdown profile (with content)
 ztx --profile llm --format markdown
 
-# 5) Changed files since main in strict JSON
+# 7) Changed files since main in strict JSON
 ztx --changed --base origin/main --format json --strict-json
 ```
 
 ## CLI highlights
 
 - Backward-compatible flags: `-no-tree`, `-no-content`, `-no-stats`, `-no-color`, `-full`
+- LLM shortcut command: `ztx ai` (equivalent to `--profile llm-token`)
 - Preferred flags:
   - `--tree / --no-tree`
   - `--content / --no-content`
@@ -63,7 +70,7 @@ ztx --changed --base origin/main --format json --strict-json
   - `--content-preset none|balanced`
   - `--content-exclude <glob>` (repeatable)
   - `--top-files <n>`
-  - `--profile review|llm|stats|<custom>`
+  - `--profile review|llm|llm-token|stats|<custom>`
   - `--path <dir-or-file>` (repeatable)
   - `--include <glob>` (repeatable)
   - `--exclude <glob>` (repeatable)
@@ -107,6 +114,7 @@ Supported sections:
 Built-in profiles:
 - `review`
 - `llm`
+- `llm-token`
 - `stats`
 
 Custom profiles can be defined in `.ztx.toml` under `[profiles.<name>]` and used via `--profile <name>`.
@@ -138,6 +146,7 @@ If git metadata is unavailable, `ztx` exits with an actionable fallback message.
 
 - `.gitignore` is respected
 - common generated/binary artifacts are skipped by built-in policy
+- content output is disabled by default (`--no-content` behavior)
 - file contents larger than `1 MiB` are skipped by default (stats still counted)
 - content preset `balanced` keeps service/config files in tree+stats but omits their body from `FILES`
 - symlinks are never traversed; they are counted under `skipped.symlink`

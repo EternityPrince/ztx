@@ -9,6 +9,14 @@ const ExtRow = struct {
     stat: model.ExtensionStat,
 };
 
+const TypeRow = struct {
+    rank: usize,
+    ext: []const u8,
+    files: usize,
+    lines: usize,
+    bytes: usize,
+};
+
 const top_types_limit: usize = 10;
 
 pub fn printStats(writer: anytype, result: *const model.ScanResult, context: RenderContext) !void {
@@ -43,22 +51,36 @@ pub fn printStats(writer: anytype, result: *const model.ScanResult, context: Ren
     var shown_lines: usize = 0;
     var shown_bytes: usize = 0;
 
+    var type_rows = std.ArrayList(TypeRow).empty;
+    defer type_rows.deinit(std.heap.page_allocator);
+
     for (rows.items[0..shown], 0..) |row, idx| {
         shown_files += row.stat.count;
         shown_lines += row.stat.total_lines;
         shown_bytes += row.stat.total_bytes;
-        try printExtRow(writer, style, idx + 1, row.ext, row.stat, result.total_files, result.total_lines, result.total_bytes);
+        try type_rows.append(std.heap.page_allocator, .{
+            .rank = idx + 1,
+            .ext = row.ext,
+            .files = row.stat.count,
+            .lines = row.stat.total_lines,
+            .bytes = row.stat.total_bytes,
+        });
     }
 
     if (rows.items.len > top_types_limit) {
-        const others = model.ExtensionStat{
-            .count = result.total_files - shown_files,
-            .total_lines = result.total_lines - shown_lines,
-            .total_bytes = result.total_bytes - shown_bytes,
-        };
-
-        try printExtRow(writer, style, 0, "others", others, result.total_files, result.total_lines, result.total_bytes);
+        const others_files = result.total_files - shown_files;
+        const others_lines = result.total_lines - shown_lines;
+        const others_bytes = result.total_bytes - shown_bytes;
+        try type_rows.append(std.heap.page_allocator, .{
+            .rank = 0,
+            .ext = "others",
+            .files = others_files,
+            .lines = others_lines,
+            .bytes = others_bytes,
+        });
     }
+
+    try printTypeTable(writer, style, type_rows.items);
 
     try writer.writeAll("\n");
     try style.write(writer, ansi.section, "SKIPPED\n");
@@ -119,61 +141,110 @@ fn printMetric(writer: anytype, style: Style, label: []const u8, value: usize) !
 
 fn printAverageMetric(writer: anytype, style: Style, label: []const u8, total: usize, count: usize) !void {
     const tenths = decimalTenths(total, count);
+    const whole = tenths / 10;
+    const frac = tenths % 10;
+    var whole_buf: [64]u8 = undefined;
+    const whole_formatted = try formatGroupedUsize(&whole_buf, whole);
     try writer.writeAll("  ");
     try style.write(writer, ansi.label, label);
     try writer.writeAll(": ");
-    try style.print(writer, ansi.value, "{d}.{d}", .{ tenths / 10, tenths % 10 });
+    try style.print(writer, ansi.value, "{s}.{d}", .{ whole_formatted, frac });
     try writer.writeAll("\n");
 }
 
-fn printExtRow(
+fn printTypeTable(
     writer: anytype,
     style: Style,
-    rank: usize,
-    ext: []const u8,
-    stat: model.ExtensionStat,
-    total_files: usize,
-    total_lines: usize,
-    total_bytes: usize,
+    rows: []const TypeRow,
 ) !void {
-    try writer.writeAll("  ");
-    if (rank == 0) {
-        try style.write(writer, ansi.label, "*");
-    } else {
-        try style.print(writer, ansi.label, "{d}.", .{rank});
-    }
-    try writer.writeAll(" ");
-    try style.write(writer, ansi.ext, ext);
-    try writer.writeAll(" | files: ");
-    try style.print(writer, ansi.value, "{d}", .{stat.count});
-    try writer.writeAll(" | lines: ");
-    try style.print(writer, ansi.value, "{d}", .{stat.total_lines});
-    try writer.writeAll(" | bytes: ");
-    try style.print(writer, ansi.value, "{d}", .{stat.total_bytes});
-    try writer.writeAll(" | share: ");
-    try printPercent(writer, style, stat.count, total_files);
-    try writer.writeAll(" / ");
-    try printPercent(writer, style, stat.total_lines, total_lines);
-    try writer.writeAll(" / ");
-    try printPercent(writer, style, stat.total_bytes, total_bytes);
-    try writer.writeAll("\n");
-}
+    var rank_width: usize = 1;
+    var ext_width: usize = 3;
+    var files_width: usize = 5;
+    var lines_width: usize = 5;
+    var bytes_width: usize = 5;
 
-fn printPercent(writer: anytype, style: Style, part: usize, total: usize) !void {
-    const scaled = @as(u128, part) * 100;
-    const tenths = decimalTenthsFromWide(scaled, total);
-    try style.print(writer, ansi.value, "{d}.{d}%", .{ tenths / 10, tenths % 10 });
+    for (rows) |row| {
+        rank_width = @max(rank_width, if (row.rank == 0) 1 else digitCount(row.rank));
+        ext_width = @max(ext_width, row.ext.len);
+
+        var files_buf: [64]u8 = undefined;
+        var lines_buf: [64]u8 = undefined;
+        var bytes_buf: [64]u8 = undefined;
+        files_width = @max(files_width, (try formatGroupedUsize(&files_buf, row.files)).len);
+        lines_width = @max(lines_width, (try formatGroupedUsize(&lines_buf, row.lines)).len);
+        bytes_width = @max(bytes_width, (try formatGroupedUsize(&bytes_buf, row.bytes)).len);
+    }
+
+    try writer.writeAll("  | ");
+    try style.write(writer, ansi.label, "#");
+    try writePadding(writer, rank_width - 1);
+    try writer.writeAll(" | ");
+    try style.write(writer, ansi.label, "ext");
+    try writePadding(writer, ext_width - 3);
+    try writer.writeAll(" | ");
+    try style.write(writer, ansi.label, "files");
+    try writePadding(writer, files_width - 5);
+    try writer.writeAll(" | ");
+    try style.write(writer, ansi.label, "lines");
+    try writePadding(writer, lines_width - 5);
+    try writer.writeAll(" | ");
+    try style.write(writer, ansi.label, "bytes");
+    try writePadding(writer, bytes_width - 5);
+    try writer.writeAll(" |\n");
+
+    try writer.writeAll("  |-");
+    try writeRepeated(writer, "-", rank_width);
+    try writer.writeAll("-|-");
+    try writeRepeated(writer, "-", ext_width);
+    try writer.writeAll("-|-");
+    try writeRepeated(writer, "-", files_width);
+    try writer.writeAll("-|-");
+    try writeRepeated(writer, "-", lines_width);
+    try writer.writeAll("-|-");
+    try writeRepeated(writer, "-", bytes_width);
+    try writer.writeAll("-|\n");
+
+    for (rows) |row| {
+        var files_buf: [64]u8 = undefined;
+        var lines_buf: [64]u8 = undefined;
+        var bytes_buf: [64]u8 = undefined;
+        const files = try formatGroupedUsize(&files_buf, row.files);
+        const lines = try formatGroupedUsize(&lines_buf, row.lines);
+        const bytes = try formatGroupedUsize(&bytes_buf, row.bytes);
+
+        try writer.writeAll("  | ");
+        if (row.rank == 0) {
+            try style.write(writer, ansi.label, "*");
+            try writePadding(writer, rank_width - 1);
+        } else {
+            var rank_buf: [16]u8 = undefined;
+            const rank_text = try std.fmt.bufPrint(&rank_buf, "{d}", .{row.rank});
+            try style.write(writer, ansi.label, rank_text);
+            try writePadding(writer, rank_width - rank_text.len);
+        }
+
+        try writer.writeAll(" | ");
+        try style.write(writer, ansi.ext, row.ext);
+        try writePadding(writer, ext_width - row.ext.len);
+
+        try writer.writeAll(" | ");
+        try style.write(writer, ansi.value, files);
+        try writePadding(writer, files_width - files.len);
+
+        try writer.writeAll(" | ");
+        try style.write(writer, ansi.value, lines);
+        try writePadding(writer, lines_width - lines.len);
+
+        try writer.writeAll(" | ");
+        try style.write(writer, ansi.value, bytes);
+        try writePadding(writer, bytes_width - bytes.len);
+        try writer.writeAll(" |\n");
+    }
 }
 
 fn decimalTenths(total: usize, count: usize) usize {
     if (count == 0) return 0;
     const numerator = @as(u128, total) * 10 + @divTrunc(@as(u128, count), 2);
-    return @intCast(@divTrunc(numerator, count));
-}
-
-fn decimalTenthsFromWide(total: u128, count: usize) usize {
-    if (count == 0) return 0;
-    const numerator = total * 10 + @divTrunc(@as(u128, count), 2);
     return @intCast(@divTrunc(numerator, count));
 }
 
@@ -192,11 +263,34 @@ fn formatGroupedUsize(buffer: *[64]u8, value: usize) ![]const u8 {
 
         if (i > 0 and digit_count % 3 == 0) {
             out_index -= 1;
-            buffer[out_index] = ' ';
+            buffer[out_index] = '_';
         }
     }
 
     return buffer[out_index..];
+}
+
+fn writePadding(writer: anytype, count: usize) !void {
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        try writer.writeAll(" ");
+    }
+}
+
+fn writeRepeated(writer: anytype, token: []const u8, count: usize) !void {
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        try writer.writeAll(token);
+    }
+}
+
+fn digitCount(value: usize) usize {
+    var n = value;
+    var digits: usize = 1;
+    while (n >= 10) : (digits += 1) {
+        n /= 10;
+    }
+    return digits;
 }
 
 fn extRowLessThan(_: void, left: ExtRow, right: ExtRow) bool {

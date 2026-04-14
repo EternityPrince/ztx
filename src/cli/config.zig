@@ -106,7 +106,7 @@ fn defaultConfig(allocator: std.mem.Allocator) !Config {
     try paths.append(allocator, try allocator.dupe(u8, "."));
 
     return .{
-        .show_content = true,
+        .show_content = false,
         .show_tree = true,
         .show_stats = true,
         .use_color = detectColorMode(.auto, .text),
@@ -182,6 +182,10 @@ fn applyProfile(
         try applyOutputPatch(allocator, config, profile.output);
     } else if (std.mem.eql(u8, profile_name, "stats")) {
         const profile = builtInStatsProfile();
+        try applyScanPatch(allocator, config, profile.scan);
+        try applyOutputPatch(allocator, config, profile.output);
+    } else if (std.mem.eql(u8, profile_name, "llm-token")) {
+        const profile = builtInLlmTokenProfile();
         try applyScanPatch(allocator, config, profile.scan);
         try applyOutputPatch(allocator, config, profile.output);
     } else if (file_config.getProfile(profile_name)) |custom_profile| {
@@ -328,6 +332,20 @@ fn builtInStatsProfile() BuiltInProfile {
     };
 }
 
+fn builtInLlmTokenProfile() BuiltInProfile {
+    return .{
+        .scan = .{},
+        .output = .{
+            .show_tree = true,
+            .show_content = false,
+            .show_stats = true,
+            .output_format = .markdown,
+            .color_mode = .never,
+            .tree_sort_mode = .lines,
+        },
+    };
+}
+
 test "defaults can be overridden by profile and cli flags" {
     const allocator = std.testing.allocator;
 
@@ -358,4 +376,34 @@ test "defaults can be overridden by profile and cli flags" {
     try std.testing.expectEqualStrings("origin/main", config.changed_base.?);
     try std.testing.expectEqual(@as(usize, 1), config.include_patterns.items.len);
     try std.testing.expectEqual(@as(usize, 1), config.exclude_patterns.items.len);
+}
+
+test "default config disables content output" {
+    const allocator = std.testing.allocator;
+    var options = parse.RunOptions{};
+    defer options.deinit(allocator);
+
+    var config = try Config.fromRunOptions(allocator, options);
+    defer config.deinit(allocator);
+
+    try std.testing.expect(!config.show_content);
+    try std.testing.expect(config.show_tree);
+    try std.testing.expect(config.show_stats);
+}
+
+test "llm-token profile is markdown and token-oriented" {
+    const allocator = std.testing.allocator;
+    var options = parse.RunOptions{};
+    defer options.deinit(allocator);
+
+    options.profile = try allocator.dupe(u8, "llm-token");
+
+    var config = try Config.fromRunOptions(allocator, options);
+    defer config.deinit(allocator);
+
+    try std.testing.expectEqual(OutputFormat.markdown, config.output_format);
+    try std.testing.expect(config.show_tree);
+    try std.testing.expect(config.show_stats);
+    try std.testing.expect(!config.show_content);
+    try std.testing.expectEqual(TreeSortMode.lines, config.tree_sort_mode);
 }

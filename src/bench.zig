@@ -1,6 +1,7 @@
 const std = @import("std");
-const walker = @import("walker.zig");
+
 const cli = @import("cli/config.zig");
+const walker = @import("walker.zig");
 
 const Scenario = struct {
     name: []const u8,

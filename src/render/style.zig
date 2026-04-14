@@ -1,15 +1,15 @@
 pub const ansi = struct {
     pub const reset = "\x1b[0m";
-    pub const section = "\x1b[1;36m";
-    pub const label = "\x1b[90m";
-    pub const value = "\x1b[1;33m";
-    pub const ext = "\x1b[92m";
-    pub const tree = "\x1b[90m";
-    pub const dir = "\x1b[1;34m";
-    pub const file = "\x1b[37m";
-    pub const path = "\x1b[95m";
-    pub const separator = "\x1b[90m";
-    pub const line_number = "\x1b[90m";
+    pub const section = "\x1b[1;38;2;74;128;203m";
+    pub const label = "\x1b[38;2;126;132;145m";
+    pub const value = "\x1b[1;38;2;197;109;45m";
+    pub const ext = "\x1b[38;2;98;151;85m";
+    pub const tree = "\x1b[38;2;126;132;145m";
+    pub const dir = "\x1b[1;38;2;83;133;194m";
+    pub const file = "\x1b[39m";
+    pub const path = "\x1b[38;2;74;128;203m";
+    pub const separator = "\x1b[38;2;126;132;145m";
+    pub const line_number = "\x1b[38;2;126;132;145m";
 };
 
 pub const Style = struct {

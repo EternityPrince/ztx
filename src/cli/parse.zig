@@ -61,6 +61,11 @@ pub const ParsedArgs = struct {
     }
 };
 
+const RunParseStatus = enum {
+    ok,
+    help,
+};
+
 pub fn parseArgs(allocator: std.mem.Allocator) !ParsedArgs {
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
@@ -86,17 +91,35 @@ fn parseArgsFrom(allocator: std.mem.Allocator, args: []const []const u8) !Parsed
             return .{ .command = .help };
         }
 
+        if (std.mem.eql(u8, first, "ai")) {
+            run.profile = try allocator.dupe(u8, "llm-token");
+            const status = try parseRunFlags(allocator, &run, args[2..]);
+            if (status == .help) return .{ .command = .help };
+            return .{ .command = .{ .run = run } };
+        }
+
         std.debug.print("unknown command: {s}\n", .{first});
         try printHelp();
         return error.UnknownCommand;
     }
 
-    var index: usize = 1;
+    const status = try parseRunFlags(allocator, &run, args[1..]);
+    if (status == .help) return .{ .command = .help };
+
+    return .{ .command = .{ .run = run } };
+}
+
+fn parseRunFlags(
+    allocator: std.mem.Allocator,
+    run: *RunOptions,
+    args: []const []const u8,
+) !RunParseStatus {
+    var index: usize = 0;
     while (index < args.len) : (index += 1) {
         const arg = args[index];
 
         if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
-            return .{ .command = .help };
+            return .help;
         }
 
         if (std.mem.eql(u8, arg, "-no-tree") or std.mem.eql(u8, arg, "--no-tree")) {
@@ -344,7 +367,7 @@ fn parseArgsFrom(allocator: std.mem.Allocator, args: []const []const u8) !Parsed
         return error.UnknownFlag;
     }
 
-    return .{ .command = .{ .run = run } };
+    return .ok;
 }
 
 fn consumeValue(args: []const []const u8, index: *usize, flag_name: []const u8) ![]const u8 {
@@ -382,6 +405,7 @@ pub fn printHelp() !void {
     try stdout.writeAll(
         \\Usage:
         \\  ztx [flags]
+        \\  ztx ai [flags]
         \\  ztx init [--force] [--dry-run]
         \\
         \\Core flags (compatible):
@@ -401,7 +425,7 @@ pub fn printHelp() !void {
         \\  --content-preset <none|balanced>
         \\  --content-exclude <glob> (repeatable)
         \\  --top-files <n>
-        \\  --profile <review|llm|stats|custom>
+        \\  --profile <review|llm|llm-token|stats|custom>
         \\  --path <dir-or-file> (repeatable)
         \\  --include <glob> (repeatable)
         \\  --exclude <glob> (repeatable)
@@ -420,7 +444,9 @@ pub fn printHelp() !void {
         \\  ztx --stats --no-content
         \\  ztx --color never
         \\  ztx --scan-mode full --path src --path build.zig
+        \\  ztx ai
         \\  ztx --format markdown --profile llm
+        \\  ztx --format markdown --profile llm-token
         \\  ztx --changed --base origin/main --format json --strict-json
         \\  ztx --tree-sort lines --content-preset balanced --content-exclude ".env*"
         \\  ztx --include "src/**" --exclude "**/*.min.js" --sort size --top-files 50
@@ -442,6 +468,36 @@ test "parse supports legacy and long aliases" {
             try std.testing.expectEqual(@as(?bool, false), run.show_tree);
             try std.testing.expectEqual(@as(?bool, true), run.show_content);
             try std.testing.expectEqual(types.ScanMode.full, run.scan_mode.?);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "parse ai command uses llm-token profile" {
+    const allocator = std.testing.allocator;
+    var parsed = try parseArgsFrom(allocator, &.{ "ztx", "ai" });
+    defer parsed.deinit(allocator);
+
+    switch (parsed.command) {
+        .run => |run| {
+            try std.testing.expect(run.profile != null);
+            try std.testing.expectEqualStrings("llm-token", run.profile.?);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "parse ai command allows flag overrides" {
+    const allocator = std.testing.allocator;
+    var parsed = try parseArgsFrom(allocator, &.{ "ztx", "ai", "--content", "--format=json" });
+    defer parsed.deinit(allocator);
+
+    switch (parsed.command) {
+        .run => |run| {
+            try std.testing.expect(run.profile != null);
+            try std.testing.expectEqualStrings("llm-token", run.profile.?);
+            try std.testing.expectEqual(@as(?bool, true), run.show_content);
+            try std.testing.expectEqual(types.OutputFormat.json, run.output_format.?);
         },
         else => return error.TestUnexpectedResult,
     }
