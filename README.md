@@ -27,7 +27,7 @@ zig build -Doptimize=ReleaseFast --prefix "$HOME/.local"
 ztx
 ```
 
-## Five real examples
+## Seven real examples
 
 ```bash
 # 1) Quick overview
@@ -39,14 +39,14 @@ ztx --stats --no-content --no-tree
 # 3) Full scan over selected paths
 ztx --scan-mode full --path src --path build.zig
 
-# 4) Token-optimized LLM output (shortcut)
+# 4) Full-context LLM output (shortcut)
 ztx ai
 
 # 5) Same as above, but explicit via profile
-ztx --profile llm-token --format markdown
-
-# 6) Full-context LLM markdown profile (with content)
 ztx --profile llm --format markdown
+
+# 6) Token-optimized LLM markdown profile
+ztx --profile llm-token --format markdown
 
 # 7) Changed files since main in strict JSON
 ztx --changed --base origin/main --format json --strict-json
@@ -55,7 +55,7 @@ ztx --changed --base origin/main --format json --strict-json
 ## CLI highlights
 
 - Backward-compatible flags: `-no-tree`, `-no-content`, `-no-stats`, `-no-color`, `-full`
-- LLM shortcut command: `ztx ai` (equivalent to `--profile llm-token`)
+- LLM shortcut command: `ztx ai` (equivalent to `--profile llm --no-stats`)
 - Preferred flags:
   - `--tree / --no-tree`
   - `--content / --no-content`

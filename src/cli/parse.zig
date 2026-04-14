@@ -92,7 +92,8 @@ fn parseArgsFrom(allocator: std.mem.Allocator, args: []const []const u8) !Parsed
         }
 
         if (std.mem.eql(u8, first, "ai")) {
-            run.profile = try allocator.dupe(u8, "llm-token");
+            run.profile = try allocator.dupe(u8, "llm");
+            run.show_stats = false;
             const status = try parseRunFlags(allocator, &run, args[2..]);
             if (status == .help) return .{ .command = .help };
             return .{ .command = .{ .run = run } };
@@ -473,7 +474,7 @@ test "parse supports legacy and long aliases" {
     }
 }
 
-test "parse ai command uses llm-token profile" {
+test "parse ai command uses llm profile" {
     const allocator = std.testing.allocator;
     var parsed = try parseArgsFrom(allocator, &.{ "ztx", "ai" });
     defer parsed.deinit(allocator);
@@ -481,7 +482,8 @@ test "parse ai command uses llm-token profile" {
     switch (parsed.command) {
         .run => |run| {
             try std.testing.expect(run.profile != null);
-            try std.testing.expectEqualStrings("llm-token", run.profile.?);
+            try std.testing.expectEqualStrings("llm", run.profile.?);
+            try std.testing.expectEqual(@as(?bool, false), run.show_stats);
         },
         else => return error.TestUnexpectedResult,
     }
@@ -495,9 +497,24 @@ test "parse ai command allows flag overrides" {
     switch (parsed.command) {
         .run => |run| {
             try std.testing.expect(run.profile != null);
-            try std.testing.expectEqualStrings("llm-token", run.profile.?);
+            try std.testing.expectEqualStrings("llm", run.profile.?);
             try std.testing.expectEqual(@as(?bool, true), run.show_content);
             try std.testing.expectEqual(types.OutputFormat.json, run.output_format.?);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "parse ai command allows enabling stats explicitly" {
+    const allocator = std.testing.allocator;
+    var parsed = try parseArgsFrom(allocator, &.{ "ztx", "ai", "--stats" });
+    defer parsed.deinit(allocator);
+
+    switch (parsed.command) {
+        .run => |run| {
+            try std.testing.expect(run.profile != null);
+            try std.testing.expectEqualStrings("llm", run.profile.?);
+            try std.testing.expectEqual(@as(?bool, true), run.show_stats);
         },
         else => return error.TestUnexpectedResult,
     }
