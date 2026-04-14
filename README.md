@@ -59,6 +59,9 @@ ztx --changed --base origin/main --format json --strict-json
   - `--strict-json / --no-strict-json`
   - `--compact / --no-compact`
   - `--sort name|size|lines`
+  - `--tree-sort name|lines|bytes`
+  - `--content-preset none|balanced`
+  - `--content-exclude <glob>` (repeatable)
   - `--top-files <n>`
   - `--profile review|llm|stats|<custom>`
   - `--path <dir-or-file>` (repeatable)
@@ -96,7 +99,7 @@ Resolution order:
 Supported sections:
 
 - `[scan]`: `mode`, `paths`, `include`, `exclude`, `max_depth`, `max_files`, `max_bytes`, `changed`, `changed_base`
-- `[output]`: `tree`, `content`, `stats`, `format`, `color`, `strict_json`, `compact`, `sort`, `top_files`
+- `[output]`: `tree`, `content`, `stats`, `format`, `color`, `strict_json`, `compact`, `sort`, `tree_sort`, `content_preset`, `content_exclude`, `top_files`
 - `[profiles.<name>]`: profile-specific overrides (same keys as above)
 
 ## Profiles
@@ -117,9 +120,9 @@ Custom profiles can be defined in `.ztx.toml` under `[profiles.<name>]` and used
 Stable JSON top-level keys:
 - `summary { files, dirs, lines, bytes }`
 - `types[]`
-- `tree[]`
+- `tree[]` (each node includes `path`, `kind`, `depth`, `files`, `lines`, `comments`, `bytes`)
 - `files[]`
-- `skipped { gitignore, builtin, binary, size_limit, depth_limit, file_limit, symlink, permission }`
+- `skipped { gitignore, builtin, binary, size_limit, content_policy, depth_limit, file_limit, symlink, permission }`
 
 `--strict-json` validates emitted JSON shape before printing.
 
@@ -136,16 +139,24 @@ If git metadata is unavailable, `ztx` exits with an actionable fallback message.
 - `.gitignore` is respected
 - common generated/binary artifacts are skipped by built-in policy
 - file contents larger than `1 MiB` are skipped by default (stats still counted)
+- content preset `balanced` keeps service/config files in tree+stats but omits their body from `FILES`
 - symlinks are never traversed; they are counted under `skipped.symlink`
 - permission-denied paths are skipped and counted under `skipped.permission`
-- skipped counters are shown by reason:
+- skipped counters are shown by reason (only non-zero reasons):
   - `gitignore`
   - `built-in ignore`
   - `binary/unsupported`
   - `size limit`
+  - `content policy`
   - `depth/file limits`
   - `symlink`
   - `permission`
+
+## AI roadmap ideas
+
+- `ztx --delta <snapshot>`: compare snapshots and rank where codebase growth happened
+- `ztx --map`: build a compact architecture map (entrypoints, core modules, import hotspots)
+- `ztx --review-hints`: suggest review focus areas from size/churn/structure signals
 
 ## Testing
 

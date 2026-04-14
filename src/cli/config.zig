@@ -7,6 +7,8 @@ pub const ScanMode = types.ScanMode;
 pub const ColorMode = types.ColorMode;
 pub const OutputFormat = types.OutputFormat;
 pub const SortMode = types.SortMode;
+pub const TreeSortMode = types.TreeSortMode;
+pub const ContentPreset = types.ContentPreset;
 
 const default_max_content_bytes: usize = 1024 * 1024;
 
@@ -30,6 +32,9 @@ pub const Config = struct {
     strict_json: bool,
     compact: bool,
     sort_mode: SortMode,
+    tree_sort_mode: TreeSortMode,
+    content_preset: ContentPreset,
+    content_exclude_patterns: std.ArrayList([]const u8),
     top_files: ?usize,
     profile_name: ?[]u8,
 
@@ -38,8 +43,10 @@ pub const Config = struct {
         self.paths.deinit(allocator);
         for (self.include_patterns.items) |pattern| allocator.free(pattern);
         for (self.exclude_patterns.items) |pattern| allocator.free(pattern);
+        for (self.content_exclude_patterns.items) |pattern| allocator.free(pattern);
         self.include_patterns.deinit(allocator);
         self.exclude_patterns.deinit(allocator);
+        self.content_exclude_patterns.deinit(allocator);
 
         if (self.profile_name) |name| allocator.free(name);
         if (self.changed_base) |base| allocator.free(base);
@@ -53,7 +60,7 @@ pub const Config = struct {
         defer file_config.deinit(allocator);
 
         try applyScanPatch(allocator, &config, file_config.scan);
-        applyOutputPatch(&config, file_config.output);
+        try applyOutputPatch(allocator, &config, file_config.output);
 
         if (options.profile) |profile_name| {
             try applyProfile(allocator, &config, profile_name, &file_config);
@@ -93,6 +100,8 @@ fn defaultConfig(allocator: std.mem.Allocator) !Config {
     errdefer include_patterns.deinit(allocator);
     var exclude_patterns = std.ArrayList([]const u8).empty;
     errdefer exclude_patterns.deinit(allocator);
+    var content_exclude_patterns = std.ArrayList([]const u8).empty;
+    errdefer content_exclude_patterns.deinit(allocator);
 
     try paths.append(allocator, try allocator.dupe(u8, "."));
 
@@ -116,6 +125,9 @@ fn defaultConfig(allocator: std.mem.Allocator) !Config {
         .strict_json = false,
         .compact = false,
         .sort_mode = .name,
+        .tree_sort_mode = .name,
+        .content_preset = .balanced,
+        .content_exclude_patterns = content_exclude_patterns,
         .top_files = null,
         .profile_name = null,
     };
@@ -137,7 +149,7 @@ fn applyScanPatch(allocator: std.mem.Allocator, config: *Config, patch: config_f
     }
 }
 
-fn applyOutputPatch(config: *Config, patch: config_file.OutputPatch) void {
+fn applyOutputPatch(allocator: std.mem.Allocator, config: *Config, patch: config_file.OutputPatch) !void {
     if (patch.show_tree) |show_tree| config.show_tree = show_tree;
     if (patch.show_content) |show_content| config.show_content = show_content;
     if (patch.show_stats) |show_stats| config.show_stats = show_stats;
@@ -146,6 +158,11 @@ fn applyOutputPatch(config: *Config, patch: config_file.OutputPatch) void {
     if (patch.strict_json) |strict_json| config.strict_json = strict_json;
     if (patch.compact) |compact| config.compact = compact;
     if (patch.sort_mode) |sort_mode| config.sort_mode = sort_mode;
+    if (patch.tree_sort_mode) |tree_sort_mode| config.tree_sort_mode = tree_sort_mode;
+    if (patch.content_preset) |content_preset| config.content_preset = content_preset;
+    if (patch.has_content_exclude_patterns) {
+        try replacePatterns(allocator, &config.content_exclude_patterns, patch.content_exclude_patterns.items);
+    }
     if (patch.top_files) |top_files| config.top_files = top_files;
 }
 
@@ -158,18 +175,18 @@ fn applyProfile(
     if (std.mem.eql(u8, profile_name, "review")) {
         const profile = builtInReviewProfile();
         try applyScanPatch(allocator, config, profile.scan);
-        applyOutputPatch(config, profile.output);
+        try applyOutputPatch(allocator, config, profile.output);
     } else if (std.mem.eql(u8, profile_name, "llm")) {
         const profile = builtInLlmProfile();
         try applyScanPatch(allocator, config, profile.scan);
-        applyOutputPatch(config, profile.output);
+        try applyOutputPatch(allocator, config, profile.output);
     } else if (std.mem.eql(u8, profile_name, "stats")) {
         const profile = builtInStatsProfile();
         try applyScanPatch(allocator, config, profile.scan);
-        applyOutputPatch(config, profile.output);
+        try applyOutputPatch(allocator, config, profile.output);
     } else if (file_config.getProfile(profile_name)) |custom_profile| {
         try applyScanPatch(allocator, config, custom_profile.scan);
-        applyOutputPatch(config, custom_profile.output);
+        try applyOutputPatch(allocator, config, custom_profile.output);
     } else {
         std.debug.print("unknown profile: {s}\n", .{profile_name});
         return error.UnknownProfile;
@@ -193,6 +210,8 @@ fn applyCliOverrides(allocator: std.mem.Allocator, config: *Config, options: par
     if (options.strict_json) |strict_json| config.strict_json = strict_json;
     if (options.compact) |compact| config.compact = compact;
     if (options.sort_mode) |sort_mode| config.sort_mode = sort_mode;
+    if (options.tree_sort_mode) |tree_sort_mode| config.tree_sort_mode = tree_sort_mode;
+    if (options.content_preset) |content_preset| config.content_preset = content_preset;
     if (options.top_files) |top_files| config.top_files = top_files;
     if (options.changed_base) |changed_base| {
         if (config.changed_base) |existing| allocator.free(existing);
@@ -210,6 +229,10 @@ fn applyCliOverrides(allocator: std.mem.Allocator, config: *Config, options: par
 
     if (options.exclude_patterns.items.len > 0) {
         try replacePatterns(allocator, &config.exclude_patterns, options.exclude_patterns.items);
+    }
+
+    if (options.content_exclude_patterns.items.len > 0) {
+        try replacePatterns(allocator, &config.content_exclude_patterns, options.content_exclude_patterns.items);
     }
 }
 

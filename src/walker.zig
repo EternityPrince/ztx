@@ -304,12 +304,15 @@ fn appendFile(
         }
     }
 
-    const capture_content = config.show_content and stat.size <= config.max_content_bytes;
-    if (config.show_content and !capture_content) {
+    const content_excluded = shouldExcludeContentByPolicy(config, file_name, rel_path);
+    const capture_content = config.show_content and !content_excluded and stat.size <= config.max_content_bytes;
+    if (config.show_content and content_excluded) {
+        result.skipped.content_policy += 1;
+    } else if (config.show_content and !capture_content) {
         result.skipped.size_limit += 1;
     }
 
-    const file_data = try helper.readFileData(allocator, file, capture_content);
+    const file_data = try helper.readFileData(allocator, file, capture_content, file_name);
     errdefer if (file_data.content) |content| allocator.free(content);
 
     const ext = std.fs.path.extension(file_name);
@@ -330,6 +333,7 @@ fn appendFile(
             .depth_level = depth,
             .byte_size = stat.size,
             .line_count = file_data.line_count,
+            .comment_line_count = file_data.comment_line_count,
             .content = file_data.content,
         },
     });
@@ -338,6 +342,53 @@ fn appendFile(
     result.total_lines += file_data.line_count;
     result.total_bytes += stat.size;
 }
+
+fn shouldExcludeContentByPolicy(config: *const cli.Config, file_name: []const u8, rel_path: []const u8) bool {
+    if (config.content_preset == .balanced) {
+        inline for (balanced_content_exclude_patterns) |pattern| {
+            if (patternMatchesPathOrBasename(pattern, file_name, rel_path)) return true;
+        }
+    }
+
+    for (config.content_exclude_patterns.items) |pattern| {
+        if (patternMatchesPathOrBasename(pattern, file_name, rel_path)) return true;
+    }
+
+    return false;
+}
+
+fn patternMatchesPathOrBasename(pattern: []const u8, file_name: []const u8, rel_path: []const u8) bool {
+    if (std.mem.indexOfScalar(u8, pattern, '/') != null) {
+        return policy.matchesPathPattern(pattern, rel_path);
+    }
+    return policy.matchesPathPattern(pattern, file_name);
+}
+
+const balanced_content_exclude_patterns = [_][]const u8{
+    "README*",
+    "CHANGELOG*",
+    "CHANGES*",
+    "LICENSE*",
+    "COPYING*",
+    "RELEASING*",
+    ".env",
+    ".env.*",
+    ".editorconfig",
+    ".clang*",
+    ".prettierrc*",
+    ".eslintrc*",
+    ".npmrc",
+    ".yarnrc*",
+    ".tool-versions",
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "Cargo.lock",
+    "Gemfile.lock",
+    "go.sum",
+    ".github/workflows/*",
+    "packaging/**",
+};
 
 fn addDirectoryEntry(
     allocator: std.mem.Allocator,
@@ -513,10 +564,10 @@ test "pathDepth counts nested separators" {
 }
 
 test "pathInScope supports dot and nested scopes" {
-    try std.testing.expect(pathInScope("src/main.zig", &.{ "." }));
-    try std.testing.expect(pathInScope("src/main.zig", &.{ "src" }));
-    try std.testing.expect(pathInScope("src/main.zig", &.{ "src/main.zig" }));
-    try std.testing.expect(!pathInScope("pkg/file.zig", &.{ "src" }));
+    try std.testing.expect(pathInScope("src/main.zig", &.{"."}));
+    try std.testing.expect(pathInScope("src/main.zig", &.{"src"}));
+    try std.testing.expect(pathInScope("src/main.zig", &.{"src/main.zig"}));
+    try std.testing.expect(!pathInScope("pkg/file.zig", &.{"src"}));
 }
 
 test "pathInScope handles long scopes without fixed buffers" {
@@ -552,6 +603,9 @@ fn makeTestConfig(allocator: std.mem.Allocator) !cli.Config {
         .strict_json = false,
         .compact = false,
         .sort_mode = .name,
+        .tree_sort_mode = .name,
+        .content_preset = .balanced,
+        .content_exclude_patterns = std.ArrayList([]const u8).empty,
         .top_files = null,
         .profile_name = null,
     };
@@ -638,6 +692,70 @@ test "scan skips oversized content but keeps stats" {
     try std.testing.expectEqual(@as(usize, 1), result.total_files);
     try std.testing.expectEqual(@as(usize, file_size), result.total_bytes);
     try std.testing.expectEqual(@as(usize, 1), result.skipped.size_limit);
+
+    switch (result.entries.items[0]) {
+        .file => |file| try std.testing.expect(file.content == null),
+        .dir => return error.TestUnexpectedResult,
+    }
+}
+
+test "scan keeps presence files in stats but omits their content" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{ .sub_path = "README.md", .data = "# hello\n" });
+    try tmp.dir.writeFile(.{ .sub_path = "src.zig", .data = "const x = 1;\n" });
+
+    var config = try makeTestConfig(allocator);
+    defer config.deinit(allocator);
+    config.show_content = true;
+    config.content_preset = .balanced;
+
+    var result = try runWalkForTest(allocator, &tmp.dir, &config);
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 2), result.total_files);
+    try std.testing.expectEqual(@as(usize, 1), result.skipped.content_policy);
+
+    var readme_content_is_null = false;
+    var zig_content_is_null = true;
+    for (result.entries.items) |entry| {
+        switch (entry) {
+            .file => |file| {
+                if (std.mem.eql(u8, file.path, "README.md")) {
+                    readme_content_is_null = file.content == null;
+                }
+                if (std.mem.eql(u8, file.path, "src.zig")) {
+                    zig_content_is_null = file.content == null;
+                }
+            },
+            .dir => {},
+        }
+    }
+
+    try std.testing.expect(readme_content_is_null);
+    try std.testing.expect(!zig_content_is_null);
+}
+
+test "scan supports custom content exclude patterns" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{ .sub_path = "notes.md", .data = "note\n" });
+
+    var config = try makeTestConfig(allocator);
+    defer config.deinit(allocator);
+    config.show_content = true;
+    config.content_preset = .none;
+    try config.content_exclude_patterns.append(allocator, try allocator.dupe(u8, "notes.md"));
+
+    var result = try runWalkForTest(allocator, &tmp.dir, &config);
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), result.total_files);
+    try std.testing.expectEqual(@as(usize, 1), result.skipped.content_policy);
 
     switch (result.entries.items[0]) {
         .file => |file| try std.testing.expect(file.content == null),

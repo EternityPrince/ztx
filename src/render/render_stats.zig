@@ -31,7 +31,7 @@ pub fn printStats(writer: anytype, result: *const model.ScanResult, context: Ren
     var iterator = result.ext_stats.iterator();
     while (iterator.next()) |ext| {
         try rows.append(std.heap.page_allocator, .{
-            .ext = ext.key_ptr.*, 
+            .ext = ext.key_ptr.*,
             .stat = ext.value_ptr.*,
         });
     }
@@ -62,21 +62,58 @@ pub fn printStats(writer: anytype, result: *const model.ScanResult, context: Ren
 
     try writer.writeAll("\n");
     try style.write(writer, ansi.section, "SKIPPED\n");
-    try printMetric(writer, style, "gitignore", result.skipped.gitignore);
-    try printMetric(writer, style, "builtin", result.skipped.builtin);
-    try printMetric(writer, style, "binary/unsupported", result.skipped.binary_or_unsupported);
-    try printMetric(writer, style, "size limit", result.skipped.size_limit);
-    try printMetric(writer, style, "depth limit", result.skipped.depth_limit);
-    try printMetric(writer, style, "file limit", result.skipped.file_limit);
-    try printMetric(writer, style, "symlink", result.skipped.symlink);
-    try printMetric(writer, style, "permission", result.skipped.permission);
+    var has_skipped = false;
+    if (result.skipped.gitignore > 0) {
+        try printMetric(writer, style, "gitignore", result.skipped.gitignore);
+        has_skipped = true;
+    }
+    if (result.skipped.builtin > 0) {
+        try printMetric(writer, style, "builtin", result.skipped.builtin);
+        has_skipped = true;
+    }
+    if (result.skipped.binary_or_unsupported > 0) {
+        try printMetric(writer, style, "binary/unsupported", result.skipped.binary_or_unsupported);
+        has_skipped = true;
+    }
+    if (result.skipped.size_limit > 0) {
+        try printMetric(writer, style, "size limit", result.skipped.size_limit);
+        has_skipped = true;
+    }
+    if (result.skipped.content_policy > 0) {
+        try printMetric(writer, style, "content policy", result.skipped.content_policy);
+        has_skipped = true;
+    }
+    if (result.skipped.depth_limit > 0) {
+        try printMetric(writer, style, "depth limit", result.skipped.depth_limit);
+        has_skipped = true;
+    }
+    if (result.skipped.file_limit > 0) {
+        try printMetric(writer, style, "file limit", result.skipped.file_limit);
+        has_skipped = true;
+    }
+    if (result.skipped.symlink > 0) {
+        try printMetric(writer, style, "symlink", result.skipped.symlink);
+        has_skipped = true;
+    }
+    if (result.skipped.permission > 0) {
+        try printMetric(writer, style, "permission", result.skipped.permission);
+        has_skipped = true;
+    }
+
+    if (!has_skipped) {
+        try writer.writeAll("  ");
+        try style.write(writer, ansi.label, "none");
+        try writer.writeAll("\n");
+    }
 }
 
 fn printMetric(writer: anytype, style: Style, label: []const u8, value: usize) !void {
     try writer.writeAll("  ");
     try style.write(writer, ansi.label, label);
     try writer.writeAll(": ");
-    try style.print(writer, ansi.value, "{d}", .{value});
+    var value_buf: [64]u8 = undefined;
+    const formatted = try formatGroupedUsize(&value_buf, value);
+    try style.write(writer, ansi.value, formatted);
     try writer.writeAll("\n");
 }
 
@@ -140,6 +177,28 @@ fn decimalTenthsFromWide(total: u128, count: usize) usize {
     return @intCast(@divTrunc(numerator, count));
 }
 
+fn formatGroupedUsize(buffer: *[64]u8, value: usize) ![]const u8 {
+    var raw_buf: [32]u8 = undefined;
+    const raw = try std.fmt.bufPrint(&raw_buf, "{d}", .{value});
+
+    var out_index = buffer.len;
+    var digit_count: usize = 0;
+    var i = raw.len;
+    while (i > 0) {
+        i -= 1;
+        out_index -= 1;
+        buffer[out_index] = raw[i];
+        digit_count += 1;
+
+        if (i > 0 and digit_count % 3 == 0) {
+            out_index -= 1;
+            buffer[out_index] = ' ';
+        }
+    }
+
+    return buffer[out_index..];
+}
+
 fn extRowLessThan(_: void, left: ExtRow, right: ExtRow) bool {
     if (left.stat.count != right.stat.count) return left.stat.count > right.stat.count;
     if (left.stat.total_lines != right.stat.total_lines) return left.stat.total_lines > right.stat.total_lines;
@@ -167,4 +226,25 @@ test "print stats includes skipped section" {
     try std.testing.expect(std.mem.indexOf(u8, output, "SUMMARY") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "SKIPPED") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "gitignore") != null);
+}
+
+test "print stats shows none when skipped is empty" {
+    const allocator = std.testing.allocator;
+    var result = model.ScanResult.init(allocator);
+    defer result.deinit(allocator);
+
+    const stats = @import("../stats/ext_stats_update.zig");
+    try stats.updateExtensionStats(allocator, &result, ".zig", 1, 1);
+    result.total_files = 1;
+    result.total_lines = 1;
+    result.total_bytes = 1;
+
+    var buffer: [4096]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buffer);
+    try printStats(fbs.writer(), &result, .{ .style = .{ .use_color = false } });
+
+    const output = fbs.getWritten();
+    try std.testing.expect(std.mem.indexOf(u8, output, "SKIPPED") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "none") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "gitignore: 0") == null);
 }

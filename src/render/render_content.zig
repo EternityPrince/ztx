@@ -11,9 +11,23 @@ pub fn printContent(
     compact: bool,
 ) !void {
     const style = context.style;
+    var visible_files: usize = 0;
+    for (files) |file| {
+        if (file.content) |content| {
+            if (content.len > 0) visible_files += 1;
+        }
+    }
+    if (visible_files == 0) return;
+
     try style.write(writer, ansi.section, "FILES\n");
 
-    for (files, 0..) |file, index| {
+    var printed: usize = 0;
+    for (files) |file| {
+        const content = file.content orelse continue;
+        if (content.len == 0) continue;
+
+        if (printed > 0) try writer.writeAll("\n");
+
         if (compact) {
             try style.write(writer, ansi.path, "-- ");
             try style.write(writer, ansi.path, file.path);
@@ -24,13 +38,9 @@ pub fn printContent(
             try style.write(writer, ansi.separator, " =====\n");
         }
 
-        if (file.content) |content| {
-            try writeNumberedContent(writer, style, content, file.line_count);
-        }
-
-        if (!compact or index + 1 < files.len) {
-            try writer.writeAll("\n");
-        }
+        try writeNumberedContent(writer, style, content, file.line_count);
+        if (!compact) try writer.writeAll("\n");
+        printed += 1;
     }
 }
 
@@ -87,4 +97,71 @@ test "numbered content handles missing trailing newline" {
 
     try writeNumberedContent(fbs.writer(), .{ .use_color = false }, "a\nb", 2);
     try std.testing.expectEqualStrings("1 │ a\n2 │ b\n", fbs.getWritten());
+}
+
+test "printContent skips files without captured body" {
+    const allocator = std.testing.allocator;
+    const visible_content = try allocator.dupe(u8, "line\n");
+    defer allocator.free(visible_content);
+
+    const file_without_content = model.FileInfo{
+        .path = "README.md",
+        .extension = ".md",
+        .line_count = 1,
+        .comment_line_count = 0,
+        .byte_size = 4,
+        .depth_level = 0,
+        .content = null,
+    };
+    const file_with_content = model.FileInfo{
+        .path = "src/main.zig",
+        .extension = ".zig",
+        .line_count = 1,
+        .comment_line_count = 0,
+        .byte_size = 5,
+        .depth_level = 0,
+        .content = visible_content,
+    };
+
+    const files = [_]*const model.FileInfo{ &file_without_content, &file_with_content };
+
+    var buffer: [2048]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buffer);
+
+    try printContent(
+        fbs.writer(),
+        &files,
+        .{ .style = .{ .use_color = false } },
+        false,
+    );
+
+    const output = fbs.getWritten();
+    try std.testing.expect(std.mem.indexOf(u8, output, "README.md") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "src/main.zig") != null);
+}
+
+test "printContent skips empty file bodies" {
+    const empty_content = "";
+    const empty_file = model.FileInfo{
+        .path = "empty.txt",
+        .extension = ".txt",
+        .line_count = 0,
+        .comment_line_count = 0,
+        .byte_size = 0,
+        .depth_level = 0,
+        .content = empty_content,
+    };
+    const files = [_]*const model.FileInfo{&empty_file};
+
+    var buffer: [512]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buffer);
+
+    try printContent(
+        fbs.writer(),
+        &files,
+        .{ .style = .{ .use_color = false } },
+        false,
+    );
+
+    try std.testing.expectEqualStrings("", fbs.getWritten());
 }

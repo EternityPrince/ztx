@@ -5,6 +5,8 @@ const RenderContext = @import("context.zig").RenderContext;
 const Style = @import("style.zig").Style;
 const printStats = @import("render_stats.zig").printStats;
 const printTree = @import("render_tree.zig").printTree;
+const buildTreeNodes = @import("render_tree.zig").buildTreeNodes;
+const kindLabel = @import("render_tree.zig").kindLabel;
 const printContent = @import("render_content.zig").printContent;
 
 const FilePtr = *const model.FileInfo;
@@ -50,7 +52,7 @@ fn printText(writer: anytype, allocator: std.mem.Allocator, result: *const model
 
     if (config.show_tree) {
         if (need_gap and !config.compact) try writer.writeAll("\n");
-        try printTree(writer, result, context);
+        try printTree(writer, allocator, result, context, config.tree_sort_mode);
         need_gap = true;
     }
 
@@ -91,14 +93,46 @@ fn printMarkdown(writer: anytype, allocator: std.mem.Allocator, result: *const m
         }
 
         try writer.writeAll("\n## Skipped\n");
-        try writer.print("- gitignore: {d}\n", .{result.skipped.gitignore});
-        try writer.print("- builtin: {d}\n", .{result.skipped.builtin});
-        try writer.print("- binary/unsupported: {d}\n", .{result.skipped.binary_or_unsupported});
-        try writer.print("- size limit: {d}\n", .{result.skipped.size_limit});
-        try writer.print("- depth limit: {d}\n", .{result.skipped.depth_limit});
-        try writer.print("- file limit: {d}\n", .{result.skipped.file_limit});
-        try writer.print("- symlink: {d}\n", .{result.skipped.symlink});
-        try writer.print("- permission: {d}\n", .{result.skipped.permission});
+        var has_skipped = false;
+        if (result.skipped.gitignore > 0) {
+            try writer.print("- gitignore: {d}\n", .{result.skipped.gitignore});
+            has_skipped = true;
+        }
+        if (result.skipped.builtin > 0) {
+            try writer.print("- builtin: {d}\n", .{result.skipped.builtin});
+            has_skipped = true;
+        }
+        if (result.skipped.binary_or_unsupported > 0) {
+            try writer.print("- binary/unsupported: {d}\n", .{result.skipped.binary_or_unsupported});
+            has_skipped = true;
+        }
+        if (result.skipped.size_limit > 0) {
+            try writer.print("- size limit: {d}\n", .{result.skipped.size_limit});
+            has_skipped = true;
+        }
+        if (result.skipped.content_policy > 0) {
+            try writer.print("- content policy: {d}\n", .{result.skipped.content_policy});
+            has_skipped = true;
+        }
+        if (result.skipped.depth_limit > 0) {
+            try writer.print("- depth limit: {d}\n", .{result.skipped.depth_limit});
+            has_skipped = true;
+        }
+        if (result.skipped.file_limit > 0) {
+            try writer.print("- file limit: {d}\n", .{result.skipped.file_limit});
+            has_skipped = true;
+        }
+        if (result.skipped.symlink > 0) {
+            try writer.print("- symlink: {d}\n", .{result.skipped.symlink});
+            has_skipped = true;
+        }
+        if (result.skipped.permission > 0) {
+            try writer.print("- permission: {d}\n", .{result.skipped.permission});
+            has_skipped = true;
+        }
+        if (!has_skipped) {
+            try writer.writeAll("- none\n");
+        }
         try writer.writeAll("\n");
     }
 
@@ -107,7 +141,7 @@ fn printMarkdown(writer: anytype, allocator: std.mem.Allocator, result: *const m
         defer tree_buf.deinit(allocator);
 
         const tree_context = RenderContext{ .style = .{ .use_color = false } };
-        try printTree(tree_buf.writer(allocator), result, tree_context);
+        try printTree(tree_buf.writer(allocator), allocator, result, tree_context, config.tree_sort_mode);
 
         try writer.writeAll("## Directory Tree\n```text\n");
         try writer.writeAll(tree_buf.items);
@@ -124,9 +158,11 @@ fn printMarkdown(writer: anytype, allocator: std.mem.Allocator, result: *const m
         const content_context = RenderContext{ .style = .{ .use_color = false } };
         try printContent(content_buf.writer(allocator), files.items, content_context, config.compact);
 
-        try writer.writeAll("## Files\n```text\n");
-        try writer.writeAll(content_buf.items);
-        try writer.writeAll("```\n");
+        if (content_buf.items.len > 0) {
+            try writer.writeAll("## Files\n```text\n");
+            try writer.writeAll(content_buf.items);
+            try writer.writeAll("```\n");
+        }
     }
 }
 
@@ -165,25 +201,25 @@ fn printJson(writer: anytype, allocator: std.mem.Allocator, result: *const model
     }
     try writer.writeAll("],");
 
+    var tree_nodes = try buildTreeNodes(allocator, result);
+    defer tree_nodes.deinit(allocator);
+
     try writer.writeAll("\"tree\":[");
-    var first_tree = true;
-    for (result.entries.items) |entry| {
-        switch (entry) {
-            .dir => |dir| {
-                if (!first_tree) try writer.writeAll(",");
-                first_tree = false;
-                try writer.writeAll("{\"path\":");
-                try writeJsonString(writer, dir.path);
-                try writer.print(",\"kind\":\"dir\",\"depth\":{d}}}", .{dir.depth_level});
+    for (tree_nodes.items, 0..) |node, idx| {
+        if (idx > 0) try writer.writeAll(",");
+        try writer.writeAll("{\"path\":");
+        try writeJsonString(writer, node.path);
+        try writer.print(
+            ",\"kind\":\"{s}\",\"depth\":{d},\"files\":{d},\"lines\":{d},\"comments\":{d},\"bytes\":{d}}}",
+            .{
+                kindLabel(node.kind),
+                node.depth,
+                node.file_count,
+                node.line_count,
+                node.comment_line_count,
+                node.byte_size,
             },
-            .file => |file| {
-                if (!first_tree) try writer.writeAll(",");
-                first_tree = false;
-                try writer.writeAll("{\"path\":");
-                try writeJsonString(writer, file.path);
-                try writer.print(",\"kind\":\"file\",\"depth\":{d}}}", .{file.depth_level});
-            },
-        }
+        );
     }
     try writer.writeAll("],");
 
@@ -210,12 +246,13 @@ fn printJson(writer: anytype, allocator: std.mem.Allocator, result: *const model
 
     try writer.writeAll("\"skipped\":{");
     try writer.print(
-        "\"gitignore\":{d},\"builtin\":{d},\"binary\":{d},\"size_limit\":{d},\"depth_limit\":{d},\"file_limit\":{d},\"symlink\":{d},\"permission\":{d}",
+        "\"gitignore\":{d},\"builtin\":{d},\"binary\":{d},\"size_limit\":{d},\"content_policy\":{d},\"depth_limit\":{d},\"file_limit\":{d},\"symlink\":{d},\"permission\":{d}",
         .{
             result.skipped.gitignore,
             result.skipped.builtin,
             result.skipped.binary_or_unsupported,
             result.skipped.size_limit,
+            result.skipped.content_policy,
             result.skipped.depth_limit,
             result.skipped.file_limit,
             result.skipped.symlink,
@@ -335,6 +372,10 @@ fn validateJsonOutput(allocator: std.mem.Allocator, output: []const u8) !void {
             return error.InvalidJsonOutput;
         }
         try expectNumberField(tree_obj, "depth");
+        try expectNumberField(tree_obj, "files");
+        try expectNumberField(tree_obj, "lines");
+        try expectNumberField(tree_obj, "comments");
+        try expectNumberField(tree_obj, "bytes");
     }
 
     const files = try expectFieldArray(root, "files");
@@ -358,6 +399,7 @@ fn validateJsonOutput(allocator: std.mem.Allocator, output: []const u8) !void {
         "builtin",
         "binary",
         "size_limit",
+        "content_policy",
         "depth_limit",
         "file_limit",
         "symlink",
@@ -428,6 +470,9 @@ fn makeTestConfig(allocator: std.mem.Allocator, format: cli.OutputFormat) !cli.C
         .strict_json = false,
         .compact = false,
         .sort_mode = .name,
+        .tree_sort_mode = .name,
+        .content_preset = .balanced,
+        .content_exclude_patterns = std.ArrayList([]const u8).empty,
         .top_files = null,
         .profile_name = null,
     };
@@ -449,6 +494,7 @@ fn makeTestResult(allocator: std.mem.Allocator) !model.ScanResult {
         .path = file_path,
         .extension = ext,
         .line_count = 1,
+        .comment_line_count = 0,
         .byte_size = content.len,
         .depth_level = 1,
         .content = content,
@@ -558,6 +604,7 @@ test "json files respect sort and top-files" {
         .path = try allocator.dupe(u8, "a.zig"),
         .extension = try allocator.dupe(u8, ".zig"),
         .line_count = 5,
+        .comment_line_count = 0,
         .byte_size = 10,
         .depth_level = 0,
         .content = null,
@@ -566,6 +613,7 @@ test "json files respect sort and top-files" {
         .path = try allocator.dupe(u8, "b.zig"),
         .extension = try allocator.dupe(u8, ".zig"),
         .line_count = 10,
+        .comment_line_count = 0,
         .byte_size = 50,
         .depth_level = 0,
         .content = null,
@@ -612,18 +660,11 @@ test "golden text output for default flow" {
         \\  1. .zig | files: 1 | lines: 1 | bytes: 13 | share: 100.0% / 100.0% / 100.0%
         \\
         \\SKIPPED
-        \\  gitignore: 0
-        \\  builtin: 0
-        \\  binary/unsupported: 0
-        \\  size limit: 0
-        \\  depth limit: 0
-        \\  file limit: 0
-        \\  symlink: 0
-        \\  permission: 0
+        \\  none
         \\
         \\DIRECTORY TREE
-        \\└── src/
-        \\    └── main.zig
+        \\└── src/  [F:1 L:1 C:0 B:13B]
+        \\    └── main.zig  [L:1 C:0 B:13B]
         \\
         \\FILES
         \\===== src/main.zig =====
@@ -660,14 +701,7 @@ test "golden text output for stats profile flow" {
         \\  1. .zig | files: 1 | lines: 1 | bytes: 13 | share: 100.0% / 100.0% / 100.0%
         \\
         \\SKIPPED
-        \\  gitignore: 0
-        \\  builtin: 0
-        \\  binary/unsupported: 0
-        \\  size limit: 0
-        \\  depth limit: 0
-        \\  file limit: 0
-        \\  symlink: 0
-        \\  permission: 0
+        \\  none
         \\
     ;
     try std.testing.expectEqualStrings(expected, fbs.getWritten());
@@ -700,20 +734,13 @@ test "golden markdown output for llm flow" {
         \\| `.zig` | 1 | 1 | 13 | 100.0% | 100.0% | 100.0% |
         \\
         \\## Skipped
-        \\- gitignore: 0
-        \\- builtin: 0
-        \\- binary/unsupported: 0
-        \\- size limit: 0
-        \\- depth limit: 0
-        \\- file limit: 0
-        \\- symlink: 0
-        \\- permission: 0
+        \\- none
         \\
         \\## Directory Tree
         \\```text
         \\DIRECTORY TREE
-        \\└── src/
-        \\    └── main.zig
+        \\└── src/  [F:1 L:1 C:0 B:13B]
+        \\    └── main.zig  [L:1 C:0 B:13B]
         \\```
         \\
         \\## Files

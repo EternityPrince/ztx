@@ -45,7 +45,19 @@ pub const OutputPatch = struct {
     strict_json: ?bool = null,
     compact: ?bool = null,
     sort_mode: ?types.SortMode = null,
+    tree_sort_mode: ?types.TreeSortMode = null,
+    content_preset: ?types.ContentPreset = null,
+    has_content_exclude_patterns: bool = false,
+    content_exclude_patterns: std.ArrayList([]const u8) = .empty,
     top_files: ?usize = null,
+
+    pub fn deinit(self: *OutputPatch, allocator: std.mem.Allocator) void {
+        if (self.has_content_exclude_patterns) {
+            for (self.content_exclude_patterns.items) |pattern| allocator.free(pattern);
+            self.content_exclude_patterns.deinit(allocator);
+            self.has_content_exclude_patterns = false;
+        }
+    }
 };
 
 pub const ProfilePatch = struct {
@@ -54,6 +66,7 @@ pub const ProfilePatch = struct {
 
     pub fn deinit(self: *ProfilePatch, allocator: std.mem.Allocator) void {
         self.scan.deinit(allocator);
+        self.output.deinit(allocator);
     }
 };
 
@@ -70,6 +83,7 @@ pub const FileConfig = struct {
 
     pub fn deinit(self: *FileConfig, allocator: std.mem.Allocator) void {
         self.scan.deinit(allocator);
+        self.output.deinit(allocator);
 
         var it = self.profiles.iterator();
         while (it.next()) |entry| {
@@ -133,13 +147,13 @@ pub fn parseToml(allocator: std.mem.Allocator, content: []const u8) !FileConfig 
 
         switch (section) {
             .scan => try applyScanKey(allocator, &parsed.scan, key, value),
-            .output => try applyOutputKey(&parsed.output, key, value),
+            .output => try applyOutputKey(allocator, &parsed.output, key, value),
             .profile => |profile_name| {
                 const profile_ptr = parsed.profiles.getPtr(profile_name).?;
                 if (isScanKey(key)) {
                     try applyScanKey(allocator, &profile_ptr.scan, key, value);
                 } else if (isOutputKey(key)) {
-                    try applyOutputKey(&profile_ptr.output, key, value);
+                    try applyOutputKey(allocator, &profile_ptr.output, key, value);
                 } else {
                     return error.InvalidProfileKey;
                 }
@@ -223,7 +237,7 @@ fn applyScanKey(allocator: std.mem.Allocator, patch: *ScanPatch, key: []const u8
     return error.InvalidScanKey;
 }
 
-fn applyOutputKey(patch: *OutputPatch, key: []const u8, value: []const u8) !void {
+fn applyOutputKey(allocator: std.mem.Allocator, patch: *OutputPatch, key: []const u8, value: []const u8) !void {
     if (std.mem.eql(u8, key, "tree")) {
         patch.show_tree = try parseBool(value);
         return;
@@ -261,6 +275,21 @@ fn applyOutputKey(patch: *OutputPatch, key: []const u8, value: []const u8) !void
 
     if (std.mem.eql(u8, key, "sort")) {
         patch.sort_mode = try types.parseSortMode(try parseString(value));
+        return;
+    }
+
+    if (std.mem.eql(u8, key, "tree_sort")) {
+        patch.tree_sort_mode = try types.parseTreeSortMode(try parseString(value));
+        return;
+    }
+
+    if (std.mem.eql(u8, key, "content_preset")) {
+        patch.content_preset = try types.parseContentPreset(try parseString(value));
+        return;
+    }
+
+    if (std.mem.eql(u8, key, "content_exclude")) {
+        try replaceContentExcludes(allocator, patch, value);
         return;
     }
 
@@ -317,6 +346,22 @@ fn replaceExcludes(allocator: std.mem.Allocator, patch: *ScanPatch, value: []con
     patch.exclude_patterns = parsed_patterns;
 }
 
+fn replaceContentExcludes(allocator: std.mem.Allocator, patch: *OutputPatch, value: []const u8) !void {
+    const parsed_patterns = try parseStringArray(allocator, value);
+    errdefer {
+        for (parsed_patterns.items) |pattern| allocator.free(pattern);
+        var mutable_patterns = parsed_patterns;
+        mutable_patterns.deinit(allocator);
+    }
+
+    if (patch.has_content_exclude_patterns) {
+        for (patch.content_exclude_patterns.items) |pattern| allocator.free(pattern);
+        patch.content_exclude_patterns.deinit(allocator);
+    }
+    patch.has_content_exclude_patterns = true;
+    patch.content_exclude_patterns = parsed_patterns;
+}
+
 fn isScanKey(key: []const u8) bool {
     return std.mem.eql(u8, key, "mode") or
         std.mem.eql(u8, key, "scan_mode") or
@@ -339,6 +384,9 @@ fn isOutputKey(key: []const u8) bool {
         std.mem.eql(u8, key, "strict_json") or
         std.mem.eql(u8, key, "compact") or
         std.mem.eql(u8, key, "sort") or
+        std.mem.eql(u8, key, "tree_sort") or
+        std.mem.eql(u8, key, "content_preset") or
+        std.mem.eql(u8, key, "content_exclude") or
         std.mem.eql(u8, key, "top_files");
 }
 
@@ -434,49 +482,52 @@ pub fn writeDefaultToCwdWithForce(force: bool) !WriteStatus {
 }
 
 pub fn defaultTemplate() []const u8 {
-    return
-        \\# ztx repository config
-        \\
-        \\[scan]
-        \\mode = "default"
-        \\paths = ["."]
-        \\include = []
-        \\exclude = []
-        \\max_depth = 12
-        \\max_files = 5000
-        \\max_bytes = 20000000
-        \\changed = false
-        \\# changed_base = "origin/main"
-        \\
-        \\[output]
-        \\tree = true
-        \\content = true
-        \\stats = true
-        \\format = "text"
-        \\color = "auto"
-        \\strict_json = false
-        \\compact = false
-        \\sort = "name"
-        \\top_files = 200
-        \\
-        \\[profiles.review]
-        \\tree = true
-        \\content = false
-        \\stats = true
-        \\format = "text"
-        \\
-        \\[profiles.llm]
-        \\tree = true
-        \\content = true
-        \\stats = true
-        \\format = "markdown"
-        \\
-        \\[profiles.stats]
-        \\tree = false
-        \\content = false
-        \\stats = true
-        \\format = "text"
-        \\
+    return 
+    \\# ztx repository config
+    \\
+    \\[scan]
+    \\mode = "default"
+    \\paths = ["."]
+    \\include = []
+    \\exclude = []
+    \\max_depth = 12
+    \\max_files = 5000
+    \\max_bytes = 20000000
+    \\changed = false
+    \\# changed_base = "origin/main"
+    \\
+    \\[output]
+    \\tree = true
+    \\content = true
+    \\stats = true
+    \\format = "text"
+    \\color = "auto"
+    \\strict_json = false
+    \\compact = false
+    \\sort = "name"
+    \\tree_sort = "name"
+    \\content_preset = "balanced"
+    \\content_exclude = []
+    \\top_files = 200
+    \\
+    \\[profiles.review]
+    \\tree = true
+    \\content = false
+    \\stats = true
+    \\format = "text"
+    \\
+    \\[profiles.llm]
+    \\tree = true
+    \\content = true
+    \\stats = true
+    \\format = "markdown"
+    \\
+    \\[profiles.stats]
+    \\tree = false
+    \\content = false
+    \\stats = true
+    \\format = "text"
+    \\
     ;
 }
 
@@ -518,11 +569,15 @@ test "parseToml reads scan output and profile sections" {
         \\strict_json = true
         \\compact = true
         \\sort = "size"
+        \\tree_sort = "lines"
+        \\content_preset = "none"
+        \\content_exclude = ["README*", ".env*"]
         \\top_files = 50
         \\
         \\[profiles.custom]
         \\content = true
         \\format = "markdown"
+        \\tree_sort = "bytes"
         \\
     );
     defer parsed.deinit(allocator);
@@ -543,11 +598,16 @@ test "parseToml reads scan output and profile sections" {
     try std.testing.expectEqual(@as(?bool, true), parsed.output.strict_json);
     try std.testing.expectEqual(@as(?bool, true), parsed.output.compact);
     try std.testing.expectEqual(types.SortMode.size, parsed.output.sort_mode.?);
+    try std.testing.expectEqual(types.TreeSortMode.lines, parsed.output.tree_sort_mode.?);
+    try std.testing.expectEqual(types.ContentPreset.none, parsed.output.content_preset.?);
+    try std.testing.expect(parsed.output.has_content_exclude_patterns);
+    try std.testing.expectEqual(@as(usize, 2), parsed.output.content_exclude_patterns.items.len);
     try std.testing.expectEqual(@as(?usize, 50), parsed.output.top_files);
 
     const custom = parsed.getProfile("custom").?;
     try std.testing.expectEqual(@as(?bool, true), custom.output.show_content);
     try std.testing.expectEqual(types.OutputFormat.markdown, custom.output.output_format.?);
+    try std.testing.expectEqual(types.TreeSortMode.bytes, custom.output.tree_sort_mode.?);
 }
 
 test "writeDefaultToDir supports overwrite mode" {

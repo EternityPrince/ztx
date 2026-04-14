@@ -132,6 +132,9 @@ fn makeBenchConfig(allocator: std.mem.Allocator) !cli.Config {
         .strict_json = false,
         .compact = true,
         .sort_mode = .name,
+        .tree_sort_mode = .name,
+        .content_preset = .balanced,
+        .content_exclude_patterns = std.ArrayList([]const u8).empty,
         .top_files = null,
         .profile_name = null,
     };

@@ -20,6 +20,9 @@ pub const RunOptions = struct {
     strict_json: ?bool = null,
     compact: ?bool = null,
     sort_mode: ?types.SortMode = null,
+    tree_sort_mode: ?types.TreeSortMode = null,
+    content_preset: ?types.ContentPreset = null,
+    content_exclude_patterns: std.ArrayList([]const u8) = .empty,
     top_files: ?usize = null,
 
     pub fn deinit(self: *RunOptions, allocator: std.mem.Allocator) void {
@@ -28,9 +31,11 @@ pub const RunOptions = struct {
         for (self.paths.items) |path| allocator.free(path);
         for (self.include_patterns.items) |pattern| allocator.free(pattern);
         for (self.exclude_patterns.items) |pattern| allocator.free(pattern);
+        for (self.content_exclude_patterns.items) |pattern| allocator.free(pattern);
         self.paths.deinit(allocator);
         self.include_patterns.deinit(allocator);
         self.exclude_patterns.deinit(allocator);
+        self.content_exclude_patterns.deinit(allocator);
     }
 };
 
@@ -184,6 +189,26 @@ fn parseArgsFrom(allocator: std.mem.Allocator, args: []const []const u8) !Parsed
             continue;
         }
 
+        if (std.mem.startsWith(u8, arg, "--tree-sort=")) {
+            run.tree_sort_mode = try types.parseTreeSortMode(arg["--tree-sort=".len..]);
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--tree-sort")) {
+            const value = try consumeValue(args, &index, "--tree-sort");
+            run.tree_sort_mode = try types.parseTreeSortMode(value);
+            continue;
+        }
+
+        if (std.mem.startsWith(u8, arg, "--content-preset=")) {
+            run.content_preset = try types.parseContentPreset(arg["--content-preset=".len..]);
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--content-preset")) {
+            const value = try consumeValue(args, &index, "--content-preset");
+            run.content_preset = try types.parseContentPreset(value);
+            continue;
+        }
+
         if (std.mem.startsWith(u8, arg, "--profile=")) {
             const value = arg["--profile=".len..];
             if (run.profile) |existing| allocator.free(existing);
@@ -227,6 +252,17 @@ fn parseArgsFrom(allocator: std.mem.Allocator, args: []const []const u8) !Parsed
         if (std.mem.eql(u8, arg, "--exclude")) {
             const value = try consumeValue(args, &index, "--exclude");
             try run.exclude_patterns.append(allocator, try allocator.dupe(u8, value));
+            continue;
+        }
+
+        if (std.mem.startsWith(u8, arg, "--content-exclude=")) {
+            const value = arg["--content-exclude=".len..];
+            try run.content_exclude_patterns.append(allocator, try allocator.dupe(u8, value));
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--content-exclude")) {
+            const value = try consumeValue(args, &index, "--content-exclude");
+            try run.content_exclude_patterns.append(allocator, try allocator.dupe(u8, value));
             continue;
         }
 
@@ -339,7 +375,7 @@ fn isFlag(value: []const u8) bool {
 }
 
 pub fn printHelp() !void {
-    var stdout_buffer: [4096]u8 = undefined;
+    var stdout_buffer: [8192]u8 = undefined;
     var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
     var stdout = &stdout_writer.interface;
 
@@ -361,6 +397,9 @@ pub fn printHelp() !void {
         \\  --strict-json / --no-strict-json
         \\  --compact / --no-compact
         \\  --sort <name|size|lines>
+        \\  --tree-sort <name|lines|bytes>
+        \\  --content-preset <none|balanced>
+        \\  --content-exclude <glob> (repeatable)
         \\  --top-files <n>
         \\  --profile <review|llm|stats|custom>
         \\  --path <dir-or-file> (repeatable)
@@ -383,6 +422,7 @@ pub fn printHelp() !void {
         \\  ztx --scan-mode full --path src --path build.zig
         \\  ztx --format markdown --profile llm
         \\  ztx --changed --base origin/main --format json --strict-json
+        \\  ztx --tree-sort lines --content-preset balanced --content-exclude ".env*"
         \\  ztx --include "src/**" --exclude "**/*.min.js" --sort size --top-files 50
         \\  ztx init --dry-run
         \\  ztx init --force
@@ -415,6 +455,9 @@ test "parse supports value flags and repeatable paths" {
         "--strict-json",
         "--compact",
         "--sort=size",
+        "--tree-sort=bytes",
+        "--content-preset",
+        "none",
         "--color",
         "always",
         "--path",
@@ -423,6 +466,9 @@ test "parse supports value flags and repeatable paths" {
         "--include=src/**",
         "--exclude",
         "**/*.bin",
+        "--content-exclude",
+        ".env*",
+        "--content-exclude=README*",
         "--base",
         "origin/main",
         "--max-depth",
@@ -441,12 +487,15 @@ test "parse supports value flags and repeatable paths" {
             try std.testing.expectEqual(@as(usize, 2), run.paths.items.len);
             try std.testing.expectEqual(@as(usize, 1), run.include_patterns.items.len);
             try std.testing.expectEqual(@as(usize, 1), run.exclude_patterns.items.len);
+            try std.testing.expectEqual(@as(usize, 2), run.content_exclude_patterns.items.len);
             try std.testing.expectEqualStrings("origin/main", run.changed_base.?);
             try std.testing.expectEqual(@as(usize, 2), run.max_depth.?);
             try std.testing.expectEqual(@as(usize, 20), run.max_files.?);
             try std.testing.expectEqual(@as(usize, 1024), run.max_bytes.?);
             try std.testing.expectEqual(@as(usize, 10), run.top_files.?);
             try std.testing.expectEqual(types.SortMode.size, run.sort_mode.?);
+            try std.testing.expectEqual(types.TreeSortMode.bytes, run.tree_sort_mode.?);
+            try std.testing.expectEqual(types.ContentPreset.none, run.content_preset.?);
             try std.testing.expectEqual(@as(?bool, true), run.strict_json);
             try std.testing.expectEqual(@as(?bool, true), run.compact);
             try std.testing.expectEqual(@as(?bool, true), run.changed_only);

@@ -1,6 +1,5 @@
 const std = @import("std");
 const model = @import("../model.zig");
-const walker = @import("../walker.zig");
 const helper = @import("../helper/walker_helper.zig");
 const stats = @import("../stats/ext_stats_update.zig");
 const cli = @import("../cli/config.zig");
@@ -26,11 +25,12 @@ pub fn handleFile(
     const stat = try file.stat();
 
     const file_data = if (config.show_content or config.show_stats)
-        try helper.readFileData(allocator, &file, config.show_content)
+        try helper.readFileData(allocator, &file, config.show_content, name)
     else
         helper.FileReadResult{
             .content = null,
             .line_count = 0,
+            .comment_line_count = 0,
         };
     errdefer if (file_data.content) |content| allocator.free(content);
 
@@ -40,15 +40,16 @@ pub fn handleFile(
     const ext_copy = try allocator.dupe(u8, ext_value);
     errdefer allocator.free(ext_copy);
 
-    if (config.show_stats) try stats.updateExtansionStats(allocator, result, ext_value, file_data.line_count, stat.size);
+    if (config.show_stats) try stats.updateExtensionStats(allocator, result, ext_value, file_data.line_count, stat.size);
 
     try result.entries.append(allocator, .{
         .file = .{
             .path = path_copy,
-            .extansion = ext_copy,
+            .extension = ext_copy,
             .depth_level = depth,
             .byte_size = stat.size,
             .line_count = file_data.line_count,
+            .comment_line_count = file_data.comment_line_count,
             .content = file_data.content,
         },
     });

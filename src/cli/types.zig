@@ -23,6 +23,17 @@ pub const SortMode = enum {
     lines,
 };
 
+pub const TreeSortMode = enum {
+    name,
+    lines,
+    bytes,
+};
+
+pub const ContentPreset = enum {
+    none,
+    balanced,
+};
+
 pub fn parseScanMode(value: []const u8) !ScanMode {
     if (std.mem.eql(u8, value, "default")) return .default;
     if (std.mem.eql(u8, value, "full")) return .full;
@@ -48,6 +59,19 @@ pub fn parseSortMode(value: []const u8) !SortMode {
     if (std.mem.eql(u8, value, "size")) return .size;
     if (std.mem.eql(u8, value, "lines")) return .lines;
     return error.InvalidSortMode;
+}
+
+pub fn parseTreeSortMode(value: []const u8) !TreeSortMode {
+    if (std.mem.eql(u8, value, "name")) return .name;
+    if (std.mem.eql(u8, value, "lines")) return .lines;
+    if (std.mem.eql(u8, value, "bytes")) return .bytes;
+    return error.InvalidTreeSortMode;
+}
+
+pub fn parseContentPreset(value: []const u8) !ContentPreset {
+    if (std.mem.eql(u8, value, "none")) return .none;
+    if (std.mem.eql(u8, value, "balanced")) return .balanced;
+    return error.InvalidContentPreset;
 }
 
 pub fn colorModeLabel(mode: ColorMode) []const u8 {
@@ -78,5 +102,20 @@ pub fn sortModeLabel(mode: SortMode) []const u8 {
         .name => "name",
         .size => "size",
         .lines => "lines",
+    };
+}
+
+pub fn treeSortModeLabel(mode: TreeSortMode) []const u8 {
+    return switch (mode) {
+        .name => "name",
+        .lines => "lines",
+        .bytes => "bytes",
+    };
+}
+
+pub fn contentPresetLabel(preset: ContentPreset) []const u8 {
+    return switch (preset) {
+        .none => "none",
+        .balanced => "balanced",
     };
 }
