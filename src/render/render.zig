@@ -652,9 +652,9 @@ test "golden text output for default flow" {
     try std.testing.expect(std.mem.indexOf(u8, output, "none") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "DIRECTORY TREE") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "└── src/") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "· f=1 | l=1 | c=0 | b=13B") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "· F:1 · L:1 · C:0 · B:13B") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "└── main.zig") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "l=1 | c=0 | b=13B") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "· L:1 · C:0 · B:13B") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "FILES") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "===== src/main.zig =====") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "1 │ const x = 1;") != null);
@@ -705,9 +705,9 @@ test "golden markdown output for llm flow" {
     try std.testing.expect(std.mem.indexOf(u8, output, "- none") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "## Directory Tree") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "└── src/") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "· f=1 | l=1 | c=0 | b=13B") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "· F:1 · L:1 · C:0 · B:13B") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "└── main.zig") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "l=1 | c=0 | b=13B") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "· L:1 · C:0 · B:13B") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "## Files") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "===== src/main.zig =====") != null);
 }
