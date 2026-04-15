@@ -20,7 +20,7 @@ const TypeRow = struct {
 
 const top_types_limit: usize = 10;
 
-pub fn printStats(writer: anytype, result: *const model.ScanResult, context: RenderContext) !void {
+pub fn printStats(writer: anytype, allocator: std.mem.Allocator, result: *const model.ScanResult, context: RenderContext) !void {
     const style = context.style;
 
     try style.write(writer, ansi.section, "SUMMARY\n");
@@ -35,11 +35,11 @@ pub fn printStats(writer: anytype, result: *const model.ScanResult, context: Ren
     try style.write(writer, ansi.section, "FILE TYPES (Top 10 by files)\n");
 
     var rows = std.ArrayList(ExtRow).empty;
-    defer rows.deinit(std.heap.page_allocator);
+    defer rows.deinit(allocator);
 
     var iterator = result.ext_stats.iterator();
     while (iterator.next()) |ext| {
-        try rows.append(std.heap.page_allocator, .{
+        try rows.append(allocator, .{
             .ext = ext.key_ptr.*,
             .stat = ext.value_ptr.*,
         });
@@ -53,13 +53,13 @@ pub fn printStats(writer: anytype, result: *const model.ScanResult, context: Ren
     var shown_bytes: usize = 0;
 
     var type_rows = std.ArrayList(TypeRow).empty;
-    defer type_rows.deinit(std.heap.page_allocator);
+    defer type_rows.deinit(allocator);
 
     for (rows.items[0..shown], 0..) |row, idx| {
         shown_files += row.stat.count;
         shown_lines += row.stat.total_lines;
         shown_bytes += row.stat.total_bytes;
-        try type_rows.append(std.heap.page_allocator, .{
+        try type_rows.append(allocator, .{
             .rank = idx + 1,
             .ext = row.ext,
             .files = row.stat.count,
@@ -72,7 +72,7 @@ pub fn printStats(writer: anytype, result: *const model.ScanResult, context: Ren
         const others_files = result.total_files - shown_files;
         const others_lines = result.total_lines - shown_lines;
         const others_bytes = result.total_bytes - shown_bytes;
-        try type_rows.append(std.heap.page_allocator, .{
+        try type_rows.append(allocator, .{
             .rank = 0,
             .ext = "others",
             .files = others_files,
@@ -284,7 +284,7 @@ test "print stats includes skipped section" {
     var buffer: [4096]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buffer);
 
-    try printStats(fbs.writer(), &result, .{ .style = .{ .use_color = false } });
+    try printStats(fbs.writer(), allocator, &result, .{ .style = .{ .use_color = false } });
 
     const output = fbs.getWritten();
     try std.testing.expect(std.mem.indexOf(u8, output, "SUMMARY") != null);
@@ -305,7 +305,7 @@ test "print stats shows none when skipped is empty" {
 
     var buffer: [4096]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buffer);
-    try printStats(fbs.writer(), &result, .{ .style = .{ .use_color = false } });
+    try printStats(fbs.writer(), allocator, &result, .{ .style = .{ .use_color = false } });
 
     const output = fbs.getWritten();
     try std.testing.expect(std.mem.indexOf(u8, output, "SKIPPED") != null);

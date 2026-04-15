@@ -154,7 +154,10 @@ fn replacePaths(allocator: std.mem.Allocator, patch: *file_types.ScanPatch, valu
         mutable_paths.deinit(allocator);
     }
 
-    patch.deinit(allocator);
+    if (patch.has_paths) {
+        for (patch.paths.items) |path| allocator.free(path);
+        patch.paths.deinit(allocator);
+    }
     patch.has_paths = true;
     patch.paths = parsed_paths;
 }

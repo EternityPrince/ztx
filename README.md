@@ -124,6 +124,7 @@ Custom profiles can be defined in `.ztx.toml` under `[profiles.<name>]` and used
 - `text` (default): terminal output
 - `markdown`: report/prompt-ready output
 - `json`: structured output for tooling/automation
+- default `text` tree output includes a compact `TREE SUMMARY` header (totals + top file types)
 
 Stable JSON top-level keys:
 - `summary { files, dirs, lines, bytes }`
@@ -147,6 +148,7 @@ If git metadata is unavailable, `ztx` exits with an actionable fallback message.
 - `.gitignore` is respected
 - common generated/binary artifacts are skipped by built-in policy
 - default CLI output is `tree` only (`--tree --no-stats --no-content`)
+- tree-only default still includes compact `TREE SUMMARY` above the tree (without full `FILE TYPES` / `SKIPPED` stats sections)
 - content output is disabled by default (`--no-content` behavior)
 - file contents larger than `1 MiB` are skipped by default (stats still counted)
 - content preset `balanced` keeps service/config files in tree+stats but omits their body from `FILES`
@@ -211,7 +213,7 @@ zig build bench -- --max-small-ms 80 --max-large-ms 500 --max-changed-ms 120 --m
 
 - Default `ztx` output changed to tree-only:
   - before: tree + stats
-  - now: tree only
+  - now: tree only, with compact `TREE SUMMARY` above the tree
 - If you need previous behavior, run:
 
 ```bash

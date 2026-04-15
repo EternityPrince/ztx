@@ -17,6 +17,15 @@ pub fn printTree(
     return core.printTree(writer, allocator, result, context, tree_sort_mode);
 }
 
+pub fn printTreeSummary(
+    writer: anytype,
+    allocator: std.mem.Allocator,
+    result: *const model.ScanResult,
+    context: RenderContext,
+) !void {
+    return core.printTreeSummary(writer, allocator, result, context);
+}
+
 pub fn buildTreeNodes(allocator: std.mem.Allocator, result: *const model.ScanResult) !std.ArrayList(TreeNode) {
     return core.buildTreeNodes(allocator, result);
 }

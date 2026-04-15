@@ -102,8 +102,13 @@ test "default run configuration renders tree only in text format" {
     try printStdout(fbs.writer(), allocator, &result, &config);
 
     const output = fbs.getWritten();
-    try std.testing.expect(std.mem.indexOf(u8, output, "DIRECTORY TREE") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "SUMMARY") == null);
+    const tree_summary_index = std.mem.indexOf(u8, output, "TREE SUMMARY");
+    const directory_tree_index = std.mem.indexOf(u8, output, "DIRECTORY TREE");
+    try std.testing.expect(tree_summary_index != null);
+    try std.testing.expect(directory_tree_index != null);
+    try std.testing.expect(tree_summary_index.? < directory_tree_index.?);
+    try std.testing.expect(std.mem.indexOf(u8, output, "FILE TYPES") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "SKIPPED") == null);
     try std.testing.expect(std.mem.indexOf(u8, output, "FILES") == null);
 }
 

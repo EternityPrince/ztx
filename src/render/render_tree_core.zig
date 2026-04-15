@@ -7,6 +7,8 @@ const ansi = @import("style.zig").ansi;
 const Style = @import("style.zig").Style;
 const number_format = @import("number_format.zig");
 
+const tree_summary_types_limit: usize = 3;
+
 pub const NodeKind = enum {
     dir,
     file,
@@ -22,6 +24,11 @@ pub const TreeNode = struct {
     line_count: usize,
     comment_line_count: usize,
     byte_size: usize,
+};
+
+const TreeTypeSummaryRow = struct {
+    ext: []const u8,
+    files: usize,
 };
 
 pub fn printTree(
@@ -43,6 +50,66 @@ pub fn printTree(
     defer continuation.deinit(allocator);
 
     try printChildren(writer, style, nodes.items, "", tree_sort_mode, badge_column, &continuation, allocator);
+}
+
+pub fn printTreeSummary(
+    writer: anytype,
+    allocator: std.mem.Allocator,
+    result: *const model.ScanResult,
+    context: RenderContext,
+) !void {
+    const style = context.style;
+
+    try style.write(writer, ansi.section, "TREE SUMMARY\n");
+    try printTreeMetric(writer, style, "Files", result.total_files);
+    try printTreeMetric(writer, style, "Dirs", result.total_dirs);
+    try printTreeMetric(writer, style, "Lines", result.total_lines);
+
+    var bytes_buf: [32]u8 = undefined;
+    const bytes = try number_format.formatByteSize(&bytes_buf, result.total_bytes);
+    try writer.writeAll("  ");
+    try style.write(writer, ansi.label, "Bytes");
+    try writer.writeAll(": ");
+    try style.write(writer, ansi.value, bytes);
+    try writer.writeAll("\n");
+
+    var rows = std.ArrayList(TreeTypeSummaryRow).empty;
+    defer rows.deinit(allocator);
+
+    var iterator = result.ext_stats.iterator();
+    while (iterator.next()) |ext| {
+        try rows.append(allocator, .{
+            .ext = ext.key_ptr.*,
+            .files = ext.value_ptr.count,
+        });
+    }
+
+    std.mem.sort(TreeTypeSummaryRow, rows.items, {}, treeTypeSummaryLessThan);
+
+    try writer.writeAll("  ");
+    try style.write(writer, ansi.label, "Top types");
+    try writer.writeAll(": ");
+    if (rows.items.len == 0) {
+        try style.write(writer, ansi.value, "none");
+        try writer.writeAll("\n");
+        return;
+    }
+
+    const shown = @min(rows.items.len, tree_summary_types_limit);
+    for (rows.items[0..shown], 0..) |row, idx| {
+        if (idx > 0) try writer.writeAll(", ");
+        try style.write(writer, ansi.value, row.ext);
+        try writer.writeAll(" (");
+        var count_buf: [32]u8 = undefined;
+        const count = try number_format.formatGroupedUsize(&count_buf, row.files);
+        try style.write(writer, ansi.value, count);
+        try writer.writeAll(")");
+    }
+
+    if (rows.items.len > tree_summary_types_limit) {
+        try writer.writeAll(", ...");
+    }
+    try writer.writeAll("\n");
 }
 
 pub fn buildTreeNodes(allocator: std.mem.Allocator, result: *const model.ScanResult) !std.ArrayList(TreeNode) {
@@ -220,6 +287,16 @@ fn printFileBadge(writer: anytype, style: Style, node: TreeNode) !void {
     });
 }
 
+fn printTreeMetric(writer: anytype, style: Style, label: []const u8, value: usize) !void {
+    try writer.writeAll("  ");
+    try style.write(writer, ansi.label, label);
+    try writer.writeAll(": ");
+    var value_buf: [64]u8 = undefined;
+    const formatted = try number_format.formatGroupedUsize(&value_buf, value);
+    try style.write(writer, ansi.value, formatted);
+    try writer.writeAll("\n");
+}
+
 fn parentPath(path: []const u8) []const u8 {
     const separator = std.mem.lastIndexOfScalar(u8, path, '/');
     if (separator) |index| return path[0..index];
@@ -259,6 +336,11 @@ fn nodeIndexLessThan(context: NodeSortContext, left_idx: usize, right_idx: usize
             return std.mem.order(u8, left.name, right.name) == .lt;
         },
     };
+}
+
+fn treeTypeSummaryLessThan(_: void, left: TreeTypeSummaryRow, right: TreeTypeSummaryRow) bool {
+    if (left.files != right.files) return left.files > right.files;
+    return std.mem.order(u8, left.ext, right.ext) == .lt;
 }
 
 test "tree uses unicode branches and prints badges" {
@@ -375,4 +457,36 @@ test "tree supports sorting by lines" {
     try std.testing.expect(first_file != null);
     try std.testing.expect(second_file != null);
     try std.testing.expect(first_file.? < second_file.?);
+}
+
+test "tree summary prints totals and top types" {
+    const allocator = std.testing.allocator;
+    var result = model.ScanResult.init(allocator);
+    defer result.deinit(allocator);
+
+    result.total_files = 4;
+    result.total_dirs = 2;
+    result.total_lines = 20;
+    result.total_bytes = 2048;
+
+    const stats = @import("../stats/ext_stats_update.zig");
+    try stats.updateExtensionStats(allocator, &result, ".zig", 3, 18);
+    try stats.updateExtensionStats(allocator, &result, ".md", 1, 2);
+
+    var buffer: [4096]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buffer);
+    try printTreeSummary(
+        fbs.writer(),
+        allocator,
+        &result,
+        .{ .style = .{ .use_color = false } },
+    );
+
+    const output = fbs.getWritten();
+    try std.testing.expect(std.mem.indexOf(u8, output, "TREE SUMMARY") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "Files: 4") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "Dirs: 2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "Lines: 20") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "Bytes: 2.0KiB") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "Top types: .zig (3), .md (1)") != null);
 }

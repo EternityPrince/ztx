@@ -69,6 +69,29 @@ test "parseToml reads scan output and profile sections" {
     try std.testing.expectEqual(types.TreeSortMode.bytes, custom.output.tree_sort_mode.?);
 }
 
+test "scan paths key does not reset previously parsed scan patch fields" {
+    const allocator = std.testing.allocator;
+    var parsed = try parseToml(allocator,
+        \\[scan]
+        \\include = ["src/**"]
+        \\exclude = ["**/*.bin"]
+        \\changed_base = "origin/main"
+        \\paths = ["src", "build.zig"]
+        \\
+    );
+    defer parsed.deinit(allocator);
+
+    try std.testing.expect(parsed.scan.has_paths);
+    try std.testing.expectEqual(@as(usize, 2), parsed.scan.paths.items.len);
+    try std.testing.expect(parsed.scan.has_include_patterns);
+    try std.testing.expect(parsed.scan.has_exclude_patterns);
+    try std.testing.expectEqual(@as(usize, 1), parsed.scan.include_patterns.items.len);
+    try std.testing.expectEqual(@as(usize, 1), parsed.scan.exclude_patterns.items.len);
+    try std.testing.expect(parsed.scan.changed_base != null);
+    try std.testing.expectEqualStrings("origin/main", parsed.scan.changed_base.?);
+    try std.testing.expectEqual(@as(?bool, true), parsed.scan.changed_only);
+}
+
 test "writeDefaultToDir supports overwrite mode" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
