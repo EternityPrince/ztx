@@ -26,4 +26,4 @@ jobs:
         run: zig build run -- --help
 
       - name: Benchmark smoke-test
-        run: zig build bench -- --max-small-ms 80 --max-large-ms 500 --max-small-mib 16 --max-large-mib 96
+        run: zig build bench -- --max-small-ms 80 --max-large-ms 500 --max-changed-ms 120 --max-small-mib 16 --max-large-mib 96 --max-changed-mib 48

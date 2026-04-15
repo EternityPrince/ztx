@@ -8,13 +8,23 @@ const Scenario = struct {
     files: usize,
     dirs: usize,
     lines_per_file: usize,
+    mode: Mode = .full,
+    changed_files: usize = 0,
+    staged_files: usize = 0,
+
+    const Mode = enum {
+        full,
+        changed,
+    };
 };
 
 const BenchThresholds = struct {
     max_small_ms: ?f64 = null,
     max_large_ms: ?f64 = null,
+    max_changed_ms: ?f64 = null,
     max_small_mib: ?f64 = null,
     max_large_mib: ?f64 = null,
+    max_changed_mib: ?f64 = null,
 };
 
 pub fn main() !void {
@@ -41,6 +51,15 @@ pub fn main() !void {
     const scenarios = [_]Scenario{
         .{ .name = "small", .files = 120, .dirs = 6, .lines_per_file = 8 },
         .{ .name = "large", .files = 1600, .dirs = 24, .lines_per_file = 24 },
+        .{
+            .name = "changed",
+            .files = 800,
+            .dirs = 16,
+            .lines_per_file = 14,
+            .mode = .changed,
+            .changed_files = 72,
+            .staged_files = 24,
+        },
     };
 
     var stdout_buffer: [4096]u8 = undefined;
@@ -64,9 +83,15 @@ pub fn main() !void {
 
         const cwd_dir = std.fs.cwd();
         try rebuildFixture(allocator, &cwd_dir, bench_rel, scenario);
+        if (scenario.mode == .changed) {
+            try prepareChangedRepoFixture(allocator, bench_abs, scenario);
+        }
 
         var config = try makeBenchConfig(allocator);
         defer config.deinit(allocator);
+        if (scenario.mode == .changed) {
+            config.changed_only = true;
+        }
 
         const previous_cwd = try std.process.getCwdAlloc(allocator);
         defer allocator.free(previous_cwd);
@@ -176,6 +201,58 @@ fn rebuildFixture(allocator: std.mem.Allocator, cwd: *const std.fs.Dir, relative
     }
 }
 
+fn prepareChangedRepoFixture(allocator: std.mem.Allocator, repo_abs: []const u8, scenario: Scenario) !void {
+    try runGitCommand(allocator, &.{ "git", "init", "-q" }, repo_abs);
+    try runGitCommand(allocator, &.{ "git", "config", "user.email", "bench@ztx.local" }, repo_abs);
+    try runGitCommand(allocator, &.{ "git", "config", "user.name", "ztx-bench" }, repo_abs);
+    try runGitCommand(allocator, &.{ "git", "add", "." }, repo_abs);
+    try runGitCommand(allocator, &.{ "git", "commit", "-qm", "baseline" }, repo_abs);
+
+    var repo_dir = try std.fs.openDirAbsolute(repo_abs, .{});
+    defer repo_dir.close();
+
+    var i: usize = 0;
+    while (i < scenario.changed_files) : (i += 1) {
+        const dir_name = try std.fmt.allocPrint(allocator, "d{d}", .{i % scenario.dirs});
+        defer allocator.free(dir_name);
+        const file_path = try std.fmt.allocPrint(allocator, "{s}/file_{d}.zig", .{ dir_name, i });
+        defer allocator.free(file_path);
+
+        const original = try repo_dir.readFileAlloc(allocator, file_path, 2_000_000);
+        defer allocator.free(original);
+
+        const updated = try std.fmt.allocPrint(allocator, "{s}const changed_{d} = {d};\n", .{ original, i, i });
+        defer allocator.free(updated);
+        try repo_dir.writeFile(.{ .sub_path = file_path, .data = updated });
+
+        if (i < scenario.staged_files) {
+            const add_cmd = [_][]const u8{ "git", "add", file_path };
+            try runGitCommand(allocator, &add_cmd, repo_abs);
+        }
+    }
+}
+
+fn runGitCommand(allocator: std.mem.Allocator, argv: []const []const u8, cwd: []const u8) !void {
+    const output = std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = argv,
+        .cwd = cwd,
+    }) catch |err| switch (err) {
+        error.FileNotFound => return error.GitUnavailable,
+        else => return err,
+    };
+    defer allocator.free(output.stdout);
+    defer allocator.free(output.stderr);
+
+    switch (output.term) {
+        .Exited => |code| if (code != 0) {
+            std.debug.print("git command failed ({s}) in {s}: {s}\n", .{ argv[1], cwd, output.stderr });
+            return error.GitUnavailable;
+        },
+        else => return error.GitUnavailable,
+    }
+}
+
 fn parseThresholdArgs(args: []const []const u8) !BenchThresholds {
     var thresholds = BenchThresholds{};
     var idx: usize = 0;
@@ -223,6 +300,26 @@ fn parseThresholdArgs(args: []const []const u8) !BenchThresholds {
         if (std.mem.eql(u8, arg, "--max-large-mib")) {
             const value = try consumeValue(args, &idx, "--max-large-mib");
             thresholds.max_large_mib = try parsePositiveFloat(value, "--max-large-mib");
+            continue;
+        }
+
+        if (std.mem.startsWith(u8, arg, "--max-changed-ms=")) {
+            thresholds.max_changed_ms = try parsePositiveFloat(arg["--max-changed-ms=".len..], "--max-changed-ms");
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--max-changed-ms")) {
+            const value = try consumeValue(args, &idx, "--max-changed-ms");
+            thresholds.max_changed_ms = try parsePositiveFloat(value, "--max-changed-ms");
+            continue;
+        }
+
+        if (std.mem.startsWith(u8, arg, "--max-changed-mib=")) {
+            thresholds.max_changed_mib = try parsePositiveFloat(arg["--max-changed-mib=".len..], "--max-changed-mib");
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--max-changed-mib")) {
+            const value = try consumeValue(args, &idx, "--max-changed-mib");
+            thresholds.max_changed_mib = try parsePositiveFloat(value, "--max-changed-mib");
             continue;
         }
 
@@ -274,9 +371,22 @@ fn checkScenarioThresholds(
     failed_so_far: bool,
 ) !bool {
     var failed = failed_so_far;
-    const is_small = std.mem.eql(u8, scenario_name, "small");
-    const max_ms = if (is_small) thresholds.max_small_ms else thresholds.max_large_ms;
-    const max_mib = if (is_small) thresholds.max_small_mib else thresholds.max_large_mib;
+    const max_ms = if (std.mem.eql(u8, scenario_name, "small"))
+        thresholds.max_small_ms
+    else if (std.mem.eql(u8, scenario_name, "large"))
+        thresholds.max_large_ms
+    else if (std.mem.eql(u8, scenario_name, "changed"))
+        thresholds.max_changed_ms
+    else
+        null;
+    const max_mib = if (std.mem.eql(u8, scenario_name, "small"))
+        thresholds.max_small_mib
+    else if (std.mem.eql(u8, scenario_name, "large"))
+        thresholds.max_large_mib
+    else if (std.mem.eql(u8, scenario_name, "changed"))
+        thresholds.max_changed_mib
+    else
+        null;
 
     if (max_ms) |limit_ms| {
         if (elapsed_ms > limit_ms) {
@@ -313,13 +423,15 @@ fn printBenchHelp() !void {
         \\Flags:
         \\  --max-small-ms <value>    fail if small scenario exceeds this time
         \\  --max-large-ms <value>    fail if large scenario exceeds this time
+        \\  --max-changed-ms <value>  fail if changed scenario exceeds this time
         \\  --max-small-mib <value>   fail if small scenario exceeds this arena memory
         \\  --max-large-mib <value>   fail if large scenario exceeds this arena memory
+        \\  --max-changed-mib <value> fail if changed scenario exceeds this arena memory
         \\  -h, --help
         \\
         \\Examples:
         \\  ztx-bench
-        \\  ztx-bench --max-small-ms 50 --max-large-ms 350 --max-small-mib 32 --max-large-mib 128
+        \\  ztx-bench --max-small-ms 50 --max-large-ms 350 --max-changed-ms 120 --max-small-mib 32 --max-large-mib 128 --max-changed-mib 48
         \\
     );
     try stdout.flush();
@@ -330,15 +442,20 @@ test "parse threshold args supports equals and spaced values" {
         "--max-small-ms=12.5",
         "--max-large-ms",
         "45.5",
+        "--max-changed-ms",
+        "9.25",
         "--max-small-mib",
         "3.25",
         "--max-large-mib=9.75",
+        "--max-changed-mib=7.5",
     });
 
     try std.testing.expectEqual(@as(?f64, 12.5), thresholds.max_small_ms);
     try std.testing.expectEqual(@as(?f64, 45.5), thresholds.max_large_ms);
+    try std.testing.expectEqual(@as(?f64, 9.25), thresholds.max_changed_ms);
     try std.testing.expectEqual(@as(?f64, 3.25), thresholds.max_small_mib);
     try std.testing.expectEqual(@as(?f64, 9.75), thresholds.max_large_mib);
+    try std.testing.expectEqual(@as(?f64, 7.5), thresholds.max_changed_mib);
 }
 
 test "check thresholds flags regressions and emits details" {

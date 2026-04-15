@@ -1,7 +1,7 @@
 # ztx
 
 `ztx` is a fast repository scanner for codebase context.
-It gives predictable snapshots of structure and stats by default, with optional file content and dedicated workflows (`review`, `llm`, `llm-token`, `stats`).
+It gives predictable tree-first snapshots by default, with optional stats/content and dedicated workflows (`review`, `llm`, `llm-token`, `stats`).
 
 ## Why ztx
 
@@ -30,7 +30,7 @@ ztx
 ## Seven real examples
 
 ```bash
-# 1) Quick overview
+# 1) Quick overview (default tree-only)
 ztx
 
 # 2) Stats only
@@ -146,6 +146,7 @@ If git metadata is unavailable, `ztx` exits with an actionable fallback message.
 
 - `.gitignore` is respected
 - common generated/binary artifacts are skipped by built-in policy
+- default CLI output is `tree` only (`--tree --no-stats --no-content`)
 - content output is disabled by default (`--no-content` behavior)
 - file contents larger than `1 MiB` are skipped by default (stats still counted)
 - content preset `balanced` keeps service/config files in tree+stats but omits their body from `FILES`
@@ -192,14 +193,31 @@ Smoke and regression checks:
 ```bash
 zig build run -- --help
 zig build run -- --format json --strict-json --top-files 3 --sort lines --no-tree --no-content
-zig build bench -- --max-small-ms 80 --max-large-ms 500 --max-small-mib 16 --max-large-mib 96
+zig build bench -- --max-small-ms 80 --max-large-ms 500 --max-changed-ms 120 --max-small-mib 16 --max-large-mib 96 --max-changed-mib 48
 ```
 
 ## Bench and release
 
 - micro-benchmark: `zig build bench`
-- regression gate example: `zig build bench -- --max-small-ms 80 --max-large-ms 500 --max-small-mib 16 --max-large-mib 96`
+- scenarios: `small`, `large`, `changed` (`--changed` scanner mode on a git fixture with staged + unstaged edits)
+- regression gate example: `zig build bench -- --max-small-ms 80 --max-large-ms 500 --max-changed-ms 120 --max-small-mib 16 --max-large-mib 96 --max-changed-mib 48`
+- performance policy: per-stage budget is `+5%` CPU time and `+8%` memory; CI bench gate enforces absolute thresholds
 - CI: [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
 - release pipeline: [`.github/workflows/release.yml`](.github/workflows/release.yml)
 - release checklist: [`RELEASING.md`](RELEASING.md)
 - Homebrew packaging notes: [`packaging/homebrew/README.md`](packaging/homebrew/README.md)
+
+## Behavior changes / Migration
+
+- Default `ztx` output changed to tree-only:
+  - before: tree + stats
+  - now: tree only
+- If you need previous behavior, run:
+
+```bash
+ztx --stats
+```
+
+## PR checklist
+
+- If user-visible behavior changes, update this `README.md` in the same PR (examples, defaults, migration notes).

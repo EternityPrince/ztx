@@ -3,6 +3,7 @@ const model = @import("../model.zig");
 const RenderContext = @import("context.zig").RenderContext;
 const ansi = @import("style.zig").ansi;
 const Style = @import("style.zig").Style;
+const number_format = @import("number_format.zig");
 
 pub fn printContent(
     writer: anytype,
@@ -47,7 +48,7 @@ pub fn printContent(
 fn writeNumberedContent(writer: anytype, style: Style, content: []const u8, line_count: usize) !void {
     if (content.len == 0) return;
 
-    const width = digitCount(@max(line_count, 1));
+    const width = number_format.digitCount(@max(line_count, 1));
     var start: usize = 0;
     var line_no: usize = 1;
 
@@ -78,17 +79,6 @@ fn writeLineNumber(writer: anytype, style: Style, line_no: usize, width: usize) 
 
     try style.write(writer, ansi.line_number, rendered);
     try style.write(writer, ansi.line_number, " │ ");
-}
-
-fn digitCount(value: usize) usize {
-    var n = value;
-    var digits: usize = 1;
-
-    while (n >= 10) : (digits += 1) {
-        n /= 10;
-    }
-
-    return digits;
 }
 
 test "numbered content handles missing trailing newline" {
